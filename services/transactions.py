@@ -1,4 +1,4 @@
-# services/wallet.py
+# services/transactions.py
 import logging
 from datetime import datetime, timezone
 
@@ -13,7 +13,7 @@ logger = logging.getLogger(__name__)
 
 
 def create_transaction(db: Database, vendor_id: str, transaction_data: dict) -> dict:
-    """Create a new transaction for a vendor and update wallet balance.
+    """Create a new transaction for a vendor.
 
     Args:
         db (Database): MongoDB database instance.
@@ -42,7 +42,6 @@ def create_transaction(db: Database, vendor_id: str, transaction_data: dict) -> 
         if not vendor:
             raise NotFoundError(f"Vendor with ID {vendor_id} not found")
 
-        # بررسی موجودی برای برداشت
         if transaction_data["type"] == "withdrawal" and vendor["wallet_balance"] < transaction_data["amount"]:
             raise ValidationError("Insufficient wallet balance for withdrawal")
 
@@ -52,10 +51,12 @@ def create_transaction(db: Database, vendor_id: str, transaction_data: dict) -> 
         result = db.transactions.insert_one(transaction.model_dump(exclude={"id"}))
         transaction_id = str(result.inserted_id)
 
-        # به‌روزرسانی موجودی کیف‌پول
-        balance_change = transaction_data["amount"] if transaction_data["type"] == "deposit" else -transaction_data[
-            "amount"]
-        db.vendors.update_one({"_id": ObjectId(vendor_id)}, {"$inc": {"wallet_balance": balance_change}})
+        if transaction_data["type"] == "deposit":
+            db.vendors.update_one({"_id": ObjectId(vendor_id)},
+                                  {"$inc": {"wallet_balance": transaction_data["amount"]}})
+        elif transaction_data["type"] == "withdrawal":
+            db.vendors.update_one({"_id": ObjectId(vendor_id)},
+                                  {"$inc": {"wallet_balance": -transaction_data["amount"]}})
 
         logger.info(f"Transaction created with ID: {transaction_id} for vendor: {vendor_id}")
         return {"id": transaction_id}
@@ -216,97 +217,3 @@ def update_transaction(db: Database, transaction_id: str, vendor_id: str, update
     except Exception as e:
         logger.error(f"Unexpected error in update_transaction: {str(e)}", exc_info=True)
         raise InternalServerError(f"Failed to update transaction: {str(e)}")
-
-
-def get_wallet_balance(db: Database, vendor_id: str) -> dict:
-    """Retrieve the current wallet balance for a vendor.
-
-    Args:
-        db (Database): MongoDB database instance.
-        vendor_id (str): ID of the vendor to retrieve balance for.
-
-    Returns:
-        dict: Dictionary containing the vendor's wallet balance.
-
-    Raises:
-        ValidationError: If vendor_id is invalid.
-        NotFoundError: If vendor is not found.
-        InternalServerError: For unexpected errors or database failures.
-    """
-    try:
-        if not ObjectId.is_valid(vendor_id):
-            raise ValidationError(f"Invalid vendor_id format: {vendor_id}")
-
-        vendor = db.vendors.find_one({"_id": ObjectId(vendor_id)}, {"wallet_balance": 1})
-        if not vendor:
-            raise NotFoundError(f"Vendor with ID {vendor_id} not found")
-
-        logger.info(f"Wallet balance retrieved for vendor: {vendor_id}")
-        return {"balance": vendor.get("wallet_balance", 0.0)}
-    except ValidationError as ve:
-        logger.error(f"Validation error in get_wallet_balance: {ve.detail}")
-        raise ve
-    except NotFoundError as ne:
-        logger.error(f"Not found error in get_wallet_balance: {ne.detail}")
-        raise ne
-    except OperationFailure as of:
-        logger.error(f"Database operation failed in get_wallet_balance: {str(of)}", exc_info=True)
-        raise InternalServerError(f"Failed to get wallet balance: {str(of)}")
-    except Exception as e:
-        logger.error(f"Unexpected error in get_wallet_balance: {str(e)}", exc_info=True)
-        raise InternalServerError(f"Failed to get wallet balance: {str(e)}")
-
-
-def delete_transaction(db: Database, transaction_id: str, vendor_id: str) -> dict:
-    """Delete a transaction.
-
-    Args:
-        db (Database): MongoDB database instance.
-        transaction_id (str): ID of the transaction to delete.
-        vendor_id (str): ID of the vendor deleting the transaction.
-
-    Returns:
-        dict: Confirmation message of deletion.
-
-    Raises:
-        ValidationError: If transaction_id or vendor_id is invalid.
-        NotFoundError: If transaction is not found.
-        UnauthorizedError: If vendor is not authorized.
-        InternalServerError: For unexpected errors or database failures.
-    """
-    try:
-        if not ObjectId.is_valid(transaction_id):
-            raise ValidationError(f"Invalid transaction ID format: {transaction_id}")
-        if not ObjectId.is_valid(vendor_id):
-            raise ValidationError(f"Invalid vendor_id format: {vendor_id}")
-
-        transaction = db.transactions.find_one({"_id": ObjectId(transaction_id)})
-        if not transaction:
-            raise NotFoundError(f"Transaction with ID {transaction_id} not found")
-        if transaction["vendor_id"] != vendor_id:
-            raise UnauthorizedError("You can only delete your own transactions")
-        if transaction["status"] != "pending":
-            raise ValidationError("Only pending transactions can be deleted")
-
-        # بازگرداندن تغییر موجودی کیف‌پول در صورت حذف
-        balance_change = -transaction["amount"] if transaction["type"] == "deposit" else transaction["amount"]
-        db.vendors.update_one({"_id": ObjectId(vendor_id)}, {"$inc": {"wallet_balance": balance_change}})
-
-        db.transactions.delete_one({"_id": ObjectId(transaction_id)})
-        logger.info(f"Transaction deleted: {transaction_id} by vendor: {vendor_id}")
-        return {"message": f"Transaction {transaction_id} deleted successfully"}
-    except ValidationError as ve:
-        logger.error(f"Validation error in delete_transaction: {ve.detail}")
-        raise ve
-    except NotFoundError as ne:
-        logger.error(f"Not found error in delete_transaction: {ne.detail}")
-        raise ne
-    except UnauthorizedError as ue:
-        logger.error(f"Unauthorized error in delete_transaction: {ue.detail}")
-        raise ue
-    except OperationFailure as of:
-        logger.error(f"Database operation failed in delete_transaction: {str(of)}", exc_info=True)
-        raise InternalServerError(f"Failed to delete transaction: {str(of)}")
-    except Exception as e:
-        logger.error(f"Unexpected error in delete_transaction: {str(e)}", exc_info=True)
-        raise InternalServerError(f"Failed to delete transaction: {str(e)}")
