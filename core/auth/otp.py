@@ -25,6 +25,7 @@ def generate_otp() -> str:
         otp = str(random.randint(100000, 999999))
         if os.getenv("ENV") == "development":
             logger.debug(f"Generated OTP: {otp}")
+            logger.info(f"Generated OTP: {otp}")
         else:
             logger.debug("OTP generated (hidden in non-development environment)")
         return otp

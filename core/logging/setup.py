@@ -57,7 +57,7 @@ def setup_logging(app: FastAPI) -> None:
                 },
                 "console": {
                     "class": "logging.StreamHandler",
-                    "level": "INFO",
+                    "level": "DEBUG",
                     "formatter": "default",
                 },
             },
@@ -69,7 +69,7 @@ def setup_logging(app: FastAPI) -> None:
                 },
             },
             "root": {
-                "level": "INFO",
+                "level": "DEBUG",
                 "handlers": ["console"],
             },
         }

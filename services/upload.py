@@ -73,7 +73,6 @@ class UploadService:
             if entity_type != "user" and str(entity["_id"]) != user_id and entity.get("vendor_id") != user_id:
                 raise ValidationError("You can only upload files for your own entity")
 
-            # ذخیره فایل و به‌روزرسانی دیتابیس به صورت اتمی
             file_extension = file.filename.split(".")[-1]
             file_name = f"{entity_type}_{entity_id}_{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}.{file_extension}"
             file_path = os.path.join(UPLOAD_DIR, file_name)
@@ -81,16 +80,13 @@ class UploadService:
 
             with db.client.start_session() as session:
                 with session.start_transaction():
-                    # بررسی اتمی برای جلوگیری از آپلود همزمان (اختیاری، بر اساس URL)
                     existing_url = cls.db_helper.find_one(collection_name, {f"{entity_type == 'product' and 'images' or 'avatar_urls'}": file_url}, session=session)
                     if existing_url:
                         raise ValidationError(f"A file with URL {file_url} already exists for this entity")
 
-                    # ذخیره فایل
                     with open(file_path, "wb") as buffer:
                         buffer.write(await file.read())
 
-                    # به‌روزرسانی دیتابیس
                     update_field = "avatar_urls" if entity_type in ["user", "vendor"] else "images"
                     current_urls = entity.get(update_field, [])
                     updated = cls.db_helper.update_one(
