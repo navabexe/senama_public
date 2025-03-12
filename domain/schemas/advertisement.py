@@ -2,7 +2,7 @@
 from datetime import datetime
 from typing import Optional
 
-from pydantic import BaseModel, Field, validator
+from pydantic import BaseModel, Field,  field_validator
 
 
 class AdvertisementCreate(BaseModel):
@@ -13,19 +13,19 @@ class AdvertisementCreate(BaseModel):
     starts_at: datetime = Field(..., description="Start time of the advertisement (UTC)")
     ends_at: datetime = Field(..., description="End time of the advertisement (UTC)")
 
-    @validator("type")
+    @field_validator("type")
     def validate_type(cls, value):
         if value not in ["story", "product"]:
             raise ValueError("Type must be 'story' or 'product'")
         return value
 
-    @validator("related_id", pre=True)
+    @field_validator("related_id", mode="before")
     def validate_related_id(cls, value):
         if not isinstance(value, str) or not value.strip():
             raise ValueError("Related ID must be a non-empty string")
         return value
 
-    @validator("starts_at", "ends_at", pre=True)
+    @field_validator("starts_at", "ends_at", mode="before")
     def ensure_datetime_with_timezone(cls, value):
         if isinstance(value, str):
             dt = datetime.fromisoformat(value)
@@ -36,7 +36,7 @@ class AdvertisementCreate(BaseModel):
             raise ValueError("Datetime must include timezone information")
         return value
 
-    @validator("ends_at")
+    @field_validator("ends_at")
     def ensure_ends_after_starts(cls, value, values):
         if "starts_at" in values and value <= values["starts_at"]:
             raise ValueError("ends_at must be after starts_at")
@@ -49,14 +49,14 @@ class AdvertisementUpdate(BaseModel):
     starts_at: Optional[datetime] = Field(None, description="Updated start time (UTC)")
     ends_at: Optional[datetime] = Field(None, description="Updated end time (UTC)")
 
-    @validator("status")
+    @field_validator("status")
     def validate_status(cls, value):
         valid_statuses = ["pending", "active", "expired", "rejected"]
         if value is not None and value not in valid_statuses:
             raise ValueError(f"Status must be one of {valid_statuses}")
         return value
 
-    @validator("starts_at", "ends_at", pre=True)
+    @field_validator("starts_at", "ends_at", mode="before")
     def ensure_datetime_with_timezone(cls, value):
         if value is None:
             return value
@@ -69,7 +69,7 @@ class AdvertisementUpdate(BaseModel):
             raise ValueError("Datetime must include timezone information")
         return value
 
-    @validator("ends_at")
+    @field_validator("ends_at")
     def ensure_ends_after_starts(cls, value, values):
         if value is not None and "starts_at" in values and values["starts_at"] is not None:
             if value <= values["starts_at"]:

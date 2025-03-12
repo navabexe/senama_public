@@ -1,261 +1,264 @@
 # services/vendors.py
 import logging
 from datetime import datetime, timezone
+from typing import Dict, Any, List
 
 from bson import ObjectId
 from pymongo.database import Database
 from pymongo.errors import OperationFailure, DuplicateKeyError
 
 from core.errors import NotFoundError, ValidationError, InternalServerError, UnauthorizedError
-from core.utils.db import DBHelper
+from core.utils.validation import validate_object_id
 from domain.entities.vendor import Vendor
+from domain.schemas.vendor import VendorCreate, VendorUpdate
+from domain.schemas.notification import NotificationCreate
 
 logger = logging.getLogger(__name__)
 
+class VendorService:
+    def __init__(self, db: Database):
+        """Initialize VendorService with a database instance."""
+        self.db = db
 
-def create_vendor(db: Database, vendor_data: dict) -> dict:
-    """Create a new vendor.
+    def create_vendor(self, vendor_data: Dict[str, Any]) -> Dict[str, str]:
+        """Create a new vendor with atomic check to prevent duplicates and notify admins.
 
-    Args:
-        db (Database): MongoDB database instance.
-        vendor_data (dict): Data for the vendor including username, name, owner_name, phone, etc.
+        Args:
+            vendor_data (Dict[str, Any]): Data for the vendor including username, name, owner_name, phone, etc.
 
-    Returns:
-        dict: Dictionary containing the created vendor ID.
+        Returns:
+            Dict[str, str]: Dictionary containing the created vendor ID.
 
-    Raises:
-        ValidationError: If required fields are missing or invalid.
-        NotFoundError: If any business category is not found.
-        InternalServerError: For unexpected errors or database failures.
-    """
-    db_helper = DBHelper()
-    try:
-        required_fields = ["username", "name", "owner_name", "phone", "business_category_ids", "address", "city",
-                           "province", "location"]
-        for field in required_fields:
-            if not vendor_data.get(field):
-                raise ValidationError(f"{field} is required")
-        if db_helper.find_one("vendors", {"username": vendor_data["username"]}):
-            raise ValidationError("Username already taken")
-        if db_helper.find_one("vendors", {"phone": vendor_data["phone"]}):
-            raise ValidationError("Phone number already registered")
+        Raises:
+            ValidationError: If required fields are missing, invalid, or username/phone is taken.
+            NotFoundError: If any business category is not found.
+            InternalServerError: For unexpected errors or database failures.
+        """
+        try:
+            vendor_create = VendorCreate(**vendor_data)  # اعتبارسنجی با Pydantic
+            vendor_data_validated = vendor_create.model_dump()
 
-        category_ids = vendor_data["business_category_ids"]
-        if not isinstance(category_ids, list) or not category_ids:
-            raise ValidationError("business_category_ids must be a non-empty list")
-        for category_id in category_ids:
-            if not ObjectId.is_valid(category_id):
-                raise ValidationError(f"Invalid category_id format: {category_id}")
-            if not db_helper.find_one("business_categories", {"_id": ObjectId(category_id)}):
-                raise NotFoundError(f"Business category with ID {category_id} not found")
+            for category_id in vendor_data_validated["business_category_ids"]:
+                validate_object_id(category_id, "category_id")
+                if not self.db.business_categories.find_one({"_id": ObjectId(category_id)}):
+                    raise NotFoundError(f"Business category with ID {category_id} not found")
 
-        vendor = Vendor(**vendor_data)
-        vendor_id = db_helper.insert_one("vendors", vendor.model_dump(exclude={"id"}))
+            with self.db.client.start_session() as session:
+                with session.start_transaction():
+                    if self.db.vendors.find_one({"username": vendor_data_validated["username"]}, session=session):
+                        raise ValidationError("Username already taken")
+                    if self.db.vendors.find_one({"phone": vendor_data_validated["phone"]}, session=session):
+                        raise ValidationError("Phone number already registered")
 
-        admins = db_helper.get_collection("users").find({"roles": {"$in": ["admin"]}})
-        for admin in admins:
-            notification_data = {
-                "user_id": str(admin["_id"]),
-                "vendor_id": None,
-                "type": "vendor_verification",
-                "message": f"New vendor {vendor_data['username']} (ID: {vendor_id}) awaiting verification",
-                "status": "unread",
-                "related_id": vendor_id,
-                "created_at": datetime.now(timezone.utc),
-                "updated_at": datetime.now(timezone.utc)
-            }
-            db_helper.insert_one("notifications", notification_data)
+                    vendor = Vendor(**vendor_data_validated)
+                    result = self.db.vendors.insert_one(vendor.model_dump(exclude={"id"}), session=session)
+                    vendor_id = str(result.inserted_id)
 
-        logger.info(f"Vendor created with ID: {vendor_id}")
-        return {"id": vendor_id}
-    except ValidationError as ve:
-        logger.error(f"Validation error in create_vendor: {ve.detail}")
-        raise ve
-    except NotFoundError as ne:
-        logger.error(f"Not found error in create_vendor: {ne.detail}")
-        raise ne
-    except DuplicateKeyError:
-        logger.error("Duplicate vendor detected")
-        raise ValidationError("A vendor with this username or phone already exists")
-    except OperationFailure as of:
-        logger.error(f"Database operation failed in create_vendor: {str(of)}", exc_info=True)
-        raise InternalServerError(f"Failed to create vendor: {str(of)}")
-    except Exception as e:
-        logger.error(f"Unexpected error in create_vendor: {str(e)}", exc_info=True)
-        raise InternalServerError(f"Failed to create vendor: {str(e)}")
+                    admins = self.db.users.find({"roles": {"$in": ["admin"]}}, session=session)
+                    for admin in admins:
+                        notification_data = NotificationCreate(
+                            user_id=str(admin["_id"]),
+                            vendor_id=None,
+                            type="vendor_verification",
+                            message=f"New vendor {vendor_data_validated['username']} (ID: {vendor_id}) awaiting verification",
+                            status="unread",
+                            related_id=vendor_id
+                        ).model_dump()
+                        self.db.notifications.insert_one(notification_data, session=session)
 
+            logger.info(f"Vendor created with ID: {vendor_id}")
+            return {"id": vendor_id}
+        except ValidationError as ve:
+            logger.error(f"Validation error in create_vendor: {ve.detail}")
+            raise ve
+        except NotFoundError as ne:
+            logger.error(f"Not found error in create_vendor: {ne.detail}")
+            raise ne
+        except OperationFailure as of:
+            logger.error(f"Database operation failed in create_vendor: {str(of)}", exc_info=True)
+            raise InternalServerError(f"Failed to create vendor: {str(of)}")
+        except Exception as e:
+            logger.error(f"Unexpected error in create_vendor: {str(e)}", exc_info=True)
+            raise InternalServerError(f"Failed to create vendor: {str(e)}")
 
-def get_vendor(db: Database, vendor_id: str, requester_id: str = None) -> Vendor:
-    """Retrieve a vendor by their ID.
+    def get_vendor(self, vendor_id: str, requester_id: str = None) -> Vendor:
+        """Retrieve a vendor by their ID.
 
-    Args:
-        db (Database): MongoDB database instance.
-        vendor_id (str): ID of the vendor to retrieve.
-        requester_id (str, optional): ID of the user requesting the data, for authorization check.
+        Args:
+            vendor_id (str): ID of the vendor to retrieve.
+            requester_id (str, optional): ID of the user requesting the data, for authorization check.
 
-    Returns:
-        Vendor: The requested vendor object.
+        Returns:
+            Vendor: The requested vendor object.
 
-    Raises:
-        ValidationError: If vendor_id format is invalid.
-        NotFoundError: If vendor is not found.
-        UnauthorizedError: If requester is not authorized (when applicable).
-        InternalServerError: For unexpected errors or database failures.
-    """
-    db_helper = DBHelper()
-    try:
-        if not ObjectId.is_valid(vendor_id):
-            raise ValidationError(f"Invalid vendor ID format: {vendor_id}")
+        Raises:
+            ValidationError: If vendor_id or requester_id format is invalid.
+            NotFoundError: If vendor is not found.
+            UnauthorizedError: If requester is not authorized (when applicable).
+            InternalServerError: For unexpected errors or database failures.
+        """
+        try:
+            validate_object_id(vendor_id, "vendor_id")
+            if requester_id:
+                validate_object_id(requester_id, "requester_id")
 
-        vendor = db_helper.find_one("vendors", {"_id": ObjectId(vendor_id)})
-        if not vendor:
-            raise NotFoundError(f"Vendor with ID {vendor_id} not found")
+            vendor = self.db.vendors.find_one({"_id": ObjectId(vendor_id)})
+            if not vendor:
+                raise NotFoundError(f"Vendor with ID {vendor_id} not found")
 
-        # اگر requester_id داده شده باشه، بررسی دسترسی
-        if requester_id:
-            if not ObjectId.is_valid(requester_id):
-                raise ValidationError(f"Invalid requester_id format: {requester_id}")
-            if requester_id != vendor_id:
-                requester = db_helper.find_one("users", {"_id": ObjectId(requester_id)})
+            if requester_id and requester_id != vendor_id:
+                requester = self.db.users.find_one({"_id": ObjectId(requester_id)})
                 if not requester or "admin" not in requester.get("roles", []):
                     raise UnauthorizedError("You can only view your own profile unless you are an admin")
 
-        logger.info(f"Vendor retrieved: {vendor_id}")
-        return Vendor(**vendor)
-    except ValidationError as ve:
-        logger.error(f"Validation error in get_vendor: {ve.detail}")
-        raise ve
-    except NotFoundError as ne:
-        logger.error(f"Not found error in get_vendor: {ne.detail}")
-        raise ne
-    except UnauthorizedError as ue:
-        logger.error(f"Unauthorized error in get_vendor: {ue.detail}")
-        raise ue
-    except OperationFailure as of:
-        logger.error(f"Database operation failed in get_vendor: {str(of)}", exc_info=True)
-        raise InternalServerError(f"Failed to get vendor: {str(of)}")
-    except Exception as e:
-        logger.error(f"Unexpected error in get_vendor: {str(e)}", exc_info=True)
-        raise InternalServerError(f"Failed to get vendor: {str(e)}")
+            logger.info(f"Vendor retrieved: {vendor_id}")
+            return Vendor(**vendor)
+        except ValidationError as ve:
+            logger.error(f"Validation error in get_vendor: {ve.detail}")
+            raise ve
+        except NotFoundError as ne:
+            logger.error(f"Not found error in get_vendor: {ne.detail}")
+            raise ne
+        except UnauthorizedError as ue:
+            logger.error(f"Unauthorized error in get_vendor: {ue.detail}")
+            raise ue
+        except OperationFailure as of:
+            logger.error(f"Database operation failed in get_vendor: {str(of)}", exc_info=True)
+            raise InternalServerError(f"Failed to get vendor: {str(of)}")
+        except Exception as e:
+            logger.error(f"Unexpected error in get_vendor: {str(e)}", exc_info=True)
+            raise InternalServerError(f"Failed to get vendor: {str(e)}")
 
+    def update_vendor(self, vendor_id: str, requester_id: str, update_data: Dict[str, Any]) -> Vendor:
+        """Update an existing vendor.
 
-def update_vendor(db: Database, vendor_id: str, requester_id: str, update_data: dict) -> Vendor:
-    """Update an existing vendor.
+        Args:
+            vendor_id (str): ID of the vendor to update.
+            requester_id (str): ID of the user or vendor requesting the update.
+            update_data (Dict[str, Any]): Data to update in the vendor (e.g., name, address).
 
-    Args:
-        db (Database): MongoDB database instance.
-        vendor_id (str): ID of the vendor to update.
-        requester_id (str): ID of the user or vendor requesting the update.
-        update_data (dict): Data to update in the vendor.
+        Returns:
+            Vendor: The updated vendor object.
 
-    Returns:
-        Vendor: The updated vendor object.
+        Raises:
+            ValidationError: If vendor_id, requester_id, or data is invalid.
+            NotFoundError: If vendor or business category is not found.
+            UnauthorizedError: If requester is not authorized.
+            InternalServerError: For unexpected errors or database failures.
+        """
+        try:
+            validate_object_id(vendor_id, "vendor_id")
+            validate_object_id(requester_id, "requester_id")
+            vendor_update = VendorUpdate(**update_data)  # اعتبارسنجی با Pydantic
+            update_data_validated = vendor_update.model_dump(exclude_unset=True)
 
-    Raises:
-        ValidationError: If vendor_id or requester_id is invalid.
-        NotFoundError: If vendor is not found.
-        UnauthorizedError: If requester is not authorized.
-        InternalServerError: For unexpected errors or database failures.
-    """
-    db_helper = DBHelper()
-    try:
-        if not ObjectId.is_valid(vendor_id):
-            raise ValidationError(f"Invalid vendor ID format: {vendor_id}")
-        if not ObjectId.is_valid(requester_id):
-            raise ValidationError(f"Invalid requester_id format: {requester_id}")
+            vendor = self.db.vendors.find_one({"_id": ObjectId(vendor_id)})
+            if not vendor:
+                raise NotFoundError(f"Vendor with ID {vendor_id} not found")
 
-        vendor = db.vendors.find_one({"_id": ObjectId(vendor_id)})
-        if not vendor:
-            raise NotFoundError(f"Vendor with ID {vendor_id} not found")
+            if requester_id != vendor_id:
+                requester = self.db.users.find_one({"_id": ObjectId(requester_id)})
+                if not requester or "admin" not in requester.get("roles", []):
+                    raise UnauthorizedError("You can only update your own profile unless you are an admin")
 
-        if requester_id != vendor_id:
-            requester = db_helper.find_one("users", {"_id": ObjectId(requester_id)})
-            if not requester or "admin" not in requester.get("roles", []):
-                raise UnauthorizedError("You can only update your own profile unless you are an admin")
+            if "business_category_ids" in update_data_validated:
+                for category_id in update_data_validated["business_category_ids"]:
+                    validate_object_id(category_id, "category_id")
+                    if not self.db.business_categories.find_one({"_id": ObjectId(category_id)}):
+                        raise NotFoundError(f"Business category with ID {category_id} not found")
 
-        if "business_category_ids" in update_data:
-            category_ids = update_data["business_category_ids"]
-            if not isinstance(category_ids, list) or not category_ids:
-                raise ValidationError("business_category_ids must be a non-empty list")
-            for category_id in category_ids:
-                if not ObjectId.is_valid(category_id):
-                    raise ValidationError(f"Invalid category_id format: {category_id}")
-                if not db_helper.find_one("business_categories", {"_id": ObjectId(category_id)}):
-                    raise NotFoundError(f"Business category with ID {category_id} not found")
+            if "username" in update_data_validated and update_data_validated["username"] != vendor["username"]:
+                if self.db.vendors.find_one({"username": update_data_validated["username"]}):
+                    raise ValidationError("Username already taken")
 
-        update_data["updated_at"] = datetime.now(timezone.utc)
-        updated = db.vendors.update_one({"_id": ObjectId(vendor_id)}, {"$set": update_data})
-        if updated.matched_count == 0:
-            raise InternalServerError(f"Failed to update vendor {vendor_id}")
+            if "phone" in update_data_validated and update_data_validated["phone"] != vendor["phone"]:
+                if self.db.vendors.find_one({"phone": update_data_validated["phone"]}):
+                    raise ValidationError("Phone number already registered")
 
-        updated_vendor = db.vendors.find_one({"_id": ObjectId(vendor_id)})
-        logger.info(f"Vendor updated: {vendor_id}")
-        return Vendor(**updated_vendor)
-    except ValidationError as ve:
-        logger.error(f"Validation error in update_vendor: {ve.detail}")
-        raise ve
-    except NotFoundError as ne:
-        logger.error(f"Not found error in update_vendor: {ne.detail}")
-        raise ne
-    except UnauthorizedError as ue:
-        logger.error(f"Unauthorized error in update_vendor: {ue.detail}")
-        raise ue
-    except OperationFailure as of:
-        logger.error(f"Database operation failed in update_vendor: {str(of)}", exc_info=True)
-        raise InternalServerError(f"Failed to update vendor: {str(of)}")
-    except Exception as e:
-        logger.error(f"Unexpected error in update_vendor: {str(e)}", exc_info=True)
-        raise InternalServerError(f"Failed to update vendor: {str(e)}")
+            update_data_validated["updated_at"] = datetime.now(timezone.utc)
+            updated = self.db.vendors.update_one({"_id": ObjectId(vendor_id)}, {"$set": update_data_validated})
+            if updated.matched_count == 0:
+                raise InternalServerError(f"Failed to update vendor {vendor_id}")
 
+            updated_vendor = self.db.vendors.find_one({"_id": ObjectId(vendor_id)})
+            logger.info(f"Vendor updated: {vendor_id}")
+            return Vendor(**updated_vendor)
+        except ValidationError as ve:
+            logger.error(f"Validation error in update_vendor: {ve.detail}")
+            raise ve
+        except NotFoundError as ne:
+            logger.error(f"Not found error in update_vendor: {ne.detail}")
+            raise ne
+        except UnauthorizedError as ue:
+            logger.error(f"Unauthorized error in update_vendor: {ue.detail}")
+            raise ue
+        except OperationFailure as of:
+            logger.error(f"Database operation failed in update_vendor: {str(of)}", exc_info=True)
+            raise InternalServerError(f"Failed to update vendor: {str(of)}")
+        except Exception as e:
+            logger.error(f"Unexpected error in update_vendor: {str(e)}", exc_info=True)
+            raise InternalServerError(f"Failed to update vendor: {str(e)}")
 
-def delete_vendor(db: Database, vendor_id: str, requester_id: str) -> dict:
-    """Delete a vendor.
+    def delete_vendor(self, vendor_id: str, requester_id: str) -> Dict[str, str]:
+        """Delete a vendor.
 
-    Args:
-        db (Database): MongoDB database instance.
-        vendor_id (str): ID of the vendor to delete.
-        requester_id (str): ID of the user requesting the deletion.
+        Args:
+            vendor_id (str): ID of the vendor to delete.
+            requester_id (str): ID of the user requesting the deletion.
 
-    Returns:
-        dict: Confirmation message of deletion.
+        Returns:
+            Dict[str, str]: Confirmation message of deletion.
 
-    Raises:
-        ValidationError: If vendor_id or requester_id is invalid.
-        NotFoundError: If vendor is not found.
-        UnauthorizedError: If requester is not authorized.
-        InternalServerError: For unexpected errors or database failures.
-    """
-    db_helper = DBHelper()
-    try:
-        if not ObjectId.is_valid(vendor_id):
-            raise ValidationError(f"Invalid vendor ID format: {vendor_id}")
-        if not ObjectId.is_valid(requester_id):
-            raise ValidationError(f"Invalid requester_id format: {requester_id}")
+        Raises:
+            ValidationError: If vendor_id or requester_id is invalid.
+            NotFoundError: If vendor is not found.
+            UnauthorizedError: If requester is not authorized.
+            InternalServerError: For unexpected errors or database failures.
+        """
+        try:
+            validate_object_id(vendor_id, "vendor_id")
+            validate_object_id(requester_id, "requester_id")
 
-        vendor = db.vendors.find_one({"_id": ObjectId(vendor_id)})
-        if not vendor:
-            raise NotFoundError(f"Vendor with ID {vendor_id} not found")
+            vendor = self.db.vendors.find_one({"_id": ObjectId(vendor_id)})
+            if not vendor:
+                raise NotFoundError(f"Vendor with ID {vendor_id} not found")
 
-        if requester_id != vendor_id:
-            requester = db_helper.find_one("users", {"_id": ObjectId(requester_id)})
-            if not requester or "admin" not in requester.get("roles", []):
-                raise UnauthorizedError("You can only delete your own account unless you are an admin")
+            if requester_id != vendor_id:
+                requester = self.db.users.find_one({"_id": ObjectId(requester_id)})
+                if not requester or "admin" not in requester.get("roles", []):
+                    raise UnauthorizedError("You can only delete your own account unless you are an admin")
 
-        db.vendors.delete_one({"_id": ObjectId(vendor_id)})
-        logger.info(f"Vendor deleted: {vendor_id}")
-        return {"message": f"Vendor {vendor_id} deleted successfully"}
-    except ValidationError as ve:
-        logger.error(f"Validation error in delete_vendor: {ve.detail}")
-        raise ve
-    except NotFoundError as ne:
-        logger.error(f"Not found error in delete_vendor: {ne.detail}")
-        raise ne
-    except UnauthorizedError as ue:
-        logger.error(f"Unauthorized error in delete_vendor: {ue.detail}")
-        raise ue
-    except OperationFailure as of:
-        logger.error(f"Database operation failed in delete_vendor: {str(of)}", exc_info=True)
-        raise InternalServerError(f"Failed to delete vendor: {str(of)}")
-    except Exception as e:
-        logger.error(f"Unexpected error in delete_vendor: {str(e)}", exc_info=True)
-        raise InternalServerError(f"Failed to delete vendor: {str(e)}")
+            self.db.vendors.delete_one({"_id": ObjectId(vendor_id)})
+            logger.info(f"Vendor deleted: {vendor_id}")
+            return {"message": f"Vendor {vendor_id} deleted successfully"}
+        except ValidationError as ve:
+            logger.error(f"Validation error in delete_vendor: {ve.detail}")
+            raise ve
+        except NotFoundError as ne:
+            logger.error(f"Not found error in delete_vendor: {ne.detail}")
+            raise ne
+        except UnauthorizedError as ue:
+            logger.error(f"Unauthorized error in delete_vendor: {ue.detail}")
+            raise ue
+        except OperationFailure as of:
+            logger.error(f"Database operation failed in delete_vendor: {str(of)}", exc_info=True)
+            raise InternalServerError(f"Failed to delete vendor: {str(of)}")
+        except Exception as e:
+            logger.error(f"Unexpected error in delete_vendor: {str(e)}", exc_info=True)
+            raise InternalServerError(f"Failed to delete vendor: {str(e)}")
+
+    def get_all_vendors(self) -> List[Vendor]:
+        """Get all vendors (admin only)."""
+        try:
+            vendors = list(self.db.vendors.find())
+            if not vendors:
+                logger.debug("No vendors found in the database")
+                return []
+            logger.info(f"Retrieved {len(vendors)} vendors")
+            return [Vendor(**vendor) for vendor in vendors]
+        except OperationFailure as of:
+            logger.error(f"Database operation failed in get_all_vendors: {str(of)}", exc_info=True)
+            raise InternalServerError(f"Failed to get all vendors: {str(of)}")
+        except Exception as e:
+            logger.error(f"Unexpected error in get_all_vendors: {str(e)}", exc_info=True)
+            raise InternalServerError(f"Failed to get all vendors: {str(e)}")

@@ -2,7 +2,7 @@
 from datetime import datetime, timezone
 from typing import Optional
 
-from pydantic import BaseModel, Field, validator
+from pydantic import BaseModel, Field,  field_validator
 
 
 class Advertisement(BaseModel):
@@ -20,14 +20,14 @@ class Advertisement(BaseModel):
     updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc),
                                  description="Last update time (UTC)")
 
-    @validator("id", "vendor_id", "related_id", pre=True)
+    @field_validator("id", "vendor_id", "related_id", mode="before")
     def validate_id_format(cls, value):
         """Validate that ID fields are valid strings."""
         if value is not None and (not isinstance(value, str) or not value.strip()):
             raise ValueError(f"ID must be a non-empty string, got: {value}")
         return value
 
-    @validator("type")
+    @field_validator("type")
     def validate_type(cls, value):
         """Ensure type is either 'story' or 'product'."""
         valid_types = ["story", "product"]
@@ -35,7 +35,7 @@ class Advertisement(BaseModel):
             raise ValueError(f"Type must be one of {valid_types}, got: {value}")
         return value
 
-    @validator("status")
+    @field_validator("status")
     def validate_status(cls, value):
         """Ensure status is valid."""
         valid_statuses = ["pending", "active", "expired", "rejected"]
@@ -43,7 +43,7 @@ class Advertisement(BaseModel):
             raise ValueError(f"Status must be one of {valid_statuses}, got: {value}")
         return value
 
-    @validator("starts_at", "ends_at", pre=True)
+    @field_validator("starts_at", "ends_at", mode="before")
     def ensure_datetime_with_timezone(cls, value):
         """Ensure datetime fields have timezone information."""
         if isinstance(value, str):
@@ -58,7 +58,7 @@ class Advertisement(BaseModel):
             raise ValueError("Datetime must include timezone information")
         return value
 
-    @validator("ends_at")
+    @field_validator("ends_at")
     def ensure_ends_after_starts(cls, value, values):
         """Ensure ends_at is after starts_at."""
         if "starts_at" in values and value <= values["starts_at"]:

@@ -2,7 +2,7 @@
 from datetime import datetime, timezone
 from typing import Optional, List
 
-from pydantic import BaseModel, Field, validator
+from pydantic import BaseModel, Field,  field_validator
 
 
 class Story(BaseModel):
@@ -19,21 +19,21 @@ class Story(BaseModel):
     updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc),
                                  description="Last update time (UTC)")
 
-    @validator("id", "vendor_id", pre=True)
+    @field_validator("id", "vendor_id", mode="before")
     def validate_id_format(cls, value):
         """Validate that ID fields are valid strings."""
         if value is not None and (not isinstance(value, str) or not value.strip()):
             raise ValueError(f"ID must be a non-empty string, got: {value}")
         return value
 
-    @validator("content")
+    @field_validator("content")
     def validate_content(cls, value):
         """Ensure content is a non-empty string."""
         if not value or not isinstance(value, str):
             raise ValueError("Content must be a non-empty string")
         return value.strip()
 
-    @validator("media_type")
+    @field_validator("media_type")
     def validate_media_type(cls, value):
         """Ensure media_type is valid."""
         valid_types = ["image", "video", "text"]
@@ -41,7 +41,7 @@ class Story(BaseModel):
             raise ValueError(f"Media type must be one of {valid_types}, got: {value}")
         return value
 
-    @validator("status")
+    @field_validator("status")
     def validate_status(cls, value):
         """Ensure status is valid."""
         valid_statuses = ["active", "expired"]
@@ -49,7 +49,7 @@ class Story(BaseModel):
             raise ValueError(f"Status must be one of {valid_statuses}, got: {value}")
         return value
 
-    @validator("tags")
+    @field_validator("tags")
     def validate_tags(cls, value):
         """Ensure tags is a list of valid strings if provided."""
         if value is not None:
@@ -57,7 +57,7 @@ class Story(BaseModel):
                 raise ValueError("Tags must be a list of non-empty strings if provided")
         return value
 
-    @validator("expires_at", pre=True)
+    @field_validator("expires_at", mode="before")
     def ensure_datetime_with_timezone(cls, value):
         """Ensure expires_at has timezone information."""
         if isinstance(value, str):
@@ -72,7 +72,7 @@ class Story(BaseModel):
             raise ValueError("Expires_at must include timezone information")
         return value
 
-    @validator("expires_at")
+    @field_validator("expires_at")
     def ensure_future_expiration(cls, value):
         """Ensure expires_at is in the future relative to created_at."""
         now = datetime.now(timezone.utc)

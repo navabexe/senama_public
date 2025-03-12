@@ -1,38 +1,41 @@
 # services/business_categories.py
 import logging
 from datetime import datetime, timezone
+from typing import Dict, Any, List
 
 from bson import ObjectId
 from pymongo.database import Database
 from pymongo.errors import OperationFailure, DuplicateKeyError
 
 from core.errors import NotFoundError, ValidationError, InternalServerError
+from core.utils.validation import validate_object_id
 from domain.entities.business_category import BusinessCategory
+from domain.schemas.business_category import BusinessCategoryCreate, BusinessCategoryUpdate
 
 logger = logging.getLogger(__name__)
 
-
-def create_business_category(db: Database, category_data: dict) -> dict:
+def create_business_category(db: Database, category_data: Dict[str, Any]) -> Dict[str, str]:
     """Create a new business category.
 
     Args:
         db (Database): MongoDB database instance.
-        category_data (dict): Data for the business category including name and description.
+        category_data (Dict[str, Any]): Data for the business category including name and optional description.
 
     Returns:
-        dict: Dictionary containing the created category ID.
+        Dict[str, str]: Dictionary containing the created category ID.
 
     Raises:
         ValidationError: If category name is missing or already exists.
         InternalServerError: For unexpected errors or database failures.
     """
     try:
-        if not category_data.get("name"):
-            raise ValidationError("Category name is required")
-        if db.business_categories.find_one({"name": category_data["name"]}):
+        category_create = BusinessCategoryCreate(**category_data)  # اعتبارسنجی با Pydantic
+        category_data_validated = category_create.model_dump()
+
+        if db.business_categories.find_one({"name": category_data_validated["name"]}):
             raise ValidationError("Category name already exists")
 
-        category = BusinessCategory(**category_data)
+        category = BusinessCategory(**category_data_validated)
         result = db.business_categories.insert_one(category.model_dump(exclude={"id"}))
         category_id = str(result.inserted_id)
         logger.info(f"Business category created with ID: {category_id}")
@@ -50,7 +53,6 @@ def create_business_category(db: Database, category_data: dict) -> dict:
         logger.error(f"Unexpected error in create_business_category: {str(e)}", exc_info=True)
         raise InternalServerError(f"Failed to create business category: {str(e)}")
 
-
 def get_business_category(db: Database, category_id: str) -> BusinessCategory:
     """Retrieve a business category by its ID.
 
@@ -67,8 +69,7 @@ def get_business_category(db: Database, category_id: str) -> BusinessCategory:
         InternalServerError: For unexpected errors or database failures.
     """
     try:
-        if not ObjectId.is_valid(category_id):
-            raise ValidationError(f"Invalid category ID format: {category_id}")
+        validate_object_id(category_id, "category_id")
 
         category = db.business_categories.find_one({"_id": ObjectId(category_id)})
         if not category:
@@ -89,15 +90,14 @@ def get_business_category(db: Database, category_id: str) -> BusinessCategory:
         logger.error(f"Unexpected error in get_business_category: {str(e)}", exc_info=True)
         raise InternalServerError(f"Failed to get business category: {str(e)}")
 
-
-def get_all_business_categories(db: Database) -> list[BusinessCategory]:
+def get_all_business_categories(db: Database) -> List[BusinessCategory]:
     """Retrieve all business categories.
 
     Args:
         db (Database): MongoDB database instance.
 
     Returns:
-        list[BusinessCategory]: List of all business category objects.
+        List[BusinessCategory]: List of all business category objects.
 
     Raises:
         InternalServerError: For unexpected errors or database failures.
@@ -117,36 +117,37 @@ def get_all_business_categories(db: Database) -> list[BusinessCategory]:
         logger.error(f"Unexpected error in get_all_business_categories: {str(e)}", exc_info=True)
         raise InternalServerError(f"Failed to get all business categories: {str(e)}")
 
-
-def update_business_category(db: Database, category_id: str, update_data: dict) -> BusinessCategory:
+def update_business_category(db: Database, category_id: str, update_data: Dict[str, Any]) -> BusinessCategory:
     """Update an existing business category.
 
     Args:
         db (Database): MongoDB database instance.
         category_id (str): ID of the business category to update.
-        update_data (dict): Data to update in the business category.
+        update_data (Dict[str, Any]): Data to update in the business category (e.g., name, description, status).
 
     Returns:
         BusinessCategory: The updated business category object.
 
     Raises:
-        ValidationError: If category_id or status is invalid.
+        ValidationError: If category_id is invalid or update data is invalid.
         NotFoundError: If category is not found.
         InternalServerError: For unexpected errors or database failures.
     """
     try:
-        if not ObjectId.is_valid(category_id):
-            raise ValidationError(f"Invalid category ID format: {category_id}")
+        validate_object_id(category_id, "category_id")
+        category_update = BusinessCategoryUpdate(**update_data)  # اعتبارسنجی با Pydantic
+        update_data_validated = category_update.model_dump(exclude_unset=True)
 
         category = db.business_categories.find_one({"_id": ObjectId(category_id)})
         if not category:
             raise NotFoundError(f"Business category with ID {category_id} not found")
 
-        update_data["updated_at"] = datetime.now(timezone.utc)
-        if "status" in update_data and update_data["status"] not in ["active", "inactive"]:
-            raise ValidationError("Invalid status value")
+        if "name" in update_data_validated and update_data_validated["name"] != category["name"]:
+            if db.business_categories.find_one({"name": update_data_validated["name"]}):
+                raise ValidationError("Category name already exists")
 
-        updated = db.business_categories.update_one({"_id": ObjectId(category_id)}, {"$set": update_data})
+        update_data_validated["updated_at"] = datetime.now(timezone.utc)
+        updated = db.business_categories.update_one({"_id": ObjectId(category_id)}, {"$set": update_data_validated})
         if updated.matched_count == 0:
             raise InternalServerError(f"Failed to update business category {category_id}")
 
@@ -166,31 +167,43 @@ def update_business_category(db: Database, category_id: str, update_data: dict) 
         logger.error(f"Unexpected error in update_business_category: {str(e)}", exc_info=True)
         raise InternalServerError(f"Failed to update business category: {str(e)}")
 
-
-def delete_business_category(db: Database, category_id: str) -> dict:
-    """Delete a business category.
+def delete_business_category(db: Database, category_id: str) -> Dict[str, str]:
+    """Delete a business category with transaction if related vendors exist.
 
     Args:
         db (Database): MongoDB database instance.
         category_id (str): ID of the business category to delete.
 
     Returns:
-        dict: Confirmation message of deletion.
+        Dict[str, str]: Confirmation message of deletion.
 
     Raises:
-        ValidationError: If category_id format is invalid.
+        ValidationError: If category_id is invalid.
         NotFoundError: If category is not found.
         InternalServerError: For unexpected errors or database failures.
     """
     try:
-        if not ObjectId.is_valid(category_id):
-            raise ValidationError(f"Invalid category ID format: {category_id}")
+        validate_object_id(category_id, "category_id")
 
         category = db.business_categories.find_one({"_id": ObjectId(category_id)})
         if not category:
             raise NotFoundError(f"Business category with ID {category_id} not found")
 
-        db.business_categories.delete_one({"_id": ObjectId(category_id)})
+        # بررسی وجود فروشندگان مرتبط
+        vendors_using_category = db.vendors.find_one({"category_ids": category_id})
+        if vendors_using_category:
+            with db.client.start_session() as session:
+                with session.start_transaction():
+                    # حذف دسته‌بندی از فروشندگان
+                    db.vendors.update_many(
+                        {"category_ids": category_id},
+                        {"$pull": {"category_ids": category_id}},
+                        session=session
+                    )
+                    db.business_categories.delete_one({"_id": ObjectId(category_id)}, session=session)
+        else:
+            db.business_categories.delete_one({"_id": ObjectId(category_id)})
+
         logger.info(f"Business category deleted: {category_id}")
         return {"message": f"Business category {category_id} deleted successfully"}
     except ValidationError as ve:

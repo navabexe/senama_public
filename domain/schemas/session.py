@@ -2,7 +2,7 @@
 from datetime import datetime
 from typing import Optional
 
-from pydantic import BaseModel, Field, validator
+from pydantic import BaseModel, Field,  field_validator
 
 
 class SessionCreate(BaseModel):
@@ -12,25 +12,25 @@ class SessionCreate(BaseModel):
     device_info: Optional[str] = Field(None, description="Device information for the session")
     expires_at: datetime = Field(..., description="Expiration time of the session (UTC)")
 
-    @validator("user_id", pre=True)
+    @field_validator("user_id", mode="before")
     def validate_user_id(cls, value):
         if not isinstance(value, str) or not value.strip():
             raise ValueError("User ID must be a non-empty string")
         return value
 
-    @validator("access_token", "refresh_token")
+    @field_validator("access_token", "refresh_token")
     def validate_tokens(cls, value):
         if value is not None and (not isinstance(value, str) or not value.strip()):
             raise ValueError("Token must be a non-empty string if provided")
         return value
 
-    @validator("device_info")
+    @field_validator("device_info")
     def validate_device_info(cls, value):
         if value is not None and (not isinstance(value, str) or not value.strip()):
             raise ValueError("Device info must be a non-empty string if provided")
         return value
 
-    @validator("expires_at", pre=True)
+    @field_validator("expires_at", mode="before")
     def validate_expires_at(cls, value):
         if isinstance(value, str):
             dt = datetime.fromisoformat(value)
@@ -45,7 +45,7 @@ class SessionCreate(BaseModel):
 class SessionUpdate(BaseModel):
     status: Optional[str] = Field(None, description="Updated status of the session")
 
-    @validator("status")
+    @field_validator("status")
     def validate_status(cls, value):
         valid_statuses = ["active", "revoked"]
         if value is not None and value not in valid_statuses:

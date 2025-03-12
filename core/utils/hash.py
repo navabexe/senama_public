@@ -2,28 +2,18 @@
 import logging
 
 from passlib.context import CryptContext
-from passlib.exc import UnknownHashError
+from passlib.exc import UnknownHashError, PasslibSecurityError
 
 from core.errors import InternalServerError, ValidationError
 
 logger = logging.getLogger(__name__)
 
+# Configure CryptContext with bcrypt as the primary scheme
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 
 def hash_password(password: str) -> str:
-    """Hash a password using bcrypt.
-
-    Args:
-        password (str): The plain text password to hash.
-
-    Returns:
-        str: The hashed password.
-
-    Raises:
-        ValidationError: If the password is invalid or empty.
-        InternalServerError: If hashing fails due to unexpected errors.
-    """
+    """Hash a password using bcrypt."""
     try:
         if not password or not isinstance(password, str):
             raise ValidationError("Password must be a non-empty string")
@@ -31,33 +21,21 @@ def hash_password(password: str) -> str:
         logger.debug("Password hashed successfully")
         return hashed
     except ValidationError as ve:
-        logger.error(f"Validation error hashing password: {ve.detail}")
+        logger.error(f"Validation error: {ve.detail}")
         raise ve
     except UnknownHashError as uhe:
-        logger.error(f"Unknown hash error during password hashing: {str(uhe)}", exc_info=True)
-        raise InternalServerError(f"Failed to hash password: Unknown hash format - {str(uhe)}")
-    except PasslibRuntimeError as pre:
-        logger.error(f"Runtime error during password hashing: {str(pre)}", exc_info=True)
-        raise InternalServerError(f"Failed to hash password: Hashing runtime error - {str(pre)}")
+        logger.error(f"Unknown hash error: {str(uhe)}", exc_info=True)
+        raise InternalServerError(f"Failed to hash password: {str(uhe)}")
+    except PasslibSecurityError as pre:
+        logger.error(f"Runtime error: {str(pre)}", exc_info=True)
+        raise InternalServerError(f"Failed to hash password: {str(pre)}")
     except Exception as e:
-        logger.error(f"Unexpected error hashing password: {str(e)}", exc_info=True)
+        logger.error(f"Unexpected error: {str(e)}", exc_info=True)
         raise InternalServerError(f"Failed to hash password: {str(e)}")
 
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
-    """Verify a plain password against a hashed password.
-
-    Args:
-        plain_password (str): The plain text password to verify.
-        hashed_password (str): The hashed password to compare against.
-
-    Returns:
-        bool: True if the password matches, False otherwise.
-
-    Raises:
-        ValidationError: If inputs are invalid or empty.
-        InternalServerError: If verification fails due to unexpected errors.
-    """
+    """Verify a plain password against a hashed password."""
     try:
         if not plain_password or not isinstance(plain_password, str):
             raise ValidationError("Plain password must be a non-empty string")
@@ -68,19 +46,25 @@ def verify_password(plain_password: str, hashed_password: str) -> bool:
         logger.debug(f"Password verification result: {is_valid}")
         return is_valid
     except ValidationError as ve:
-        logger.error(f"Validation error verifying password: {ve.detail}")
+        logger.error(f"Validation error: {ve.detail}")
         raise ve
     except UnknownHashError as uhe:
-        logger.error(f"Unknown hash error during password verification: {str(uhe)}", exc_info=True)
-        raise InternalServerError(f"Failed to verify password: Unknown hash format - {str(uhe)}")
-    except PasslibRuntimeError as pre:
-        logger.error(f"Runtime error during password verification: {str(pre)}", exc_info=True)
-        raise InternalServerError(f"Failed to verify password: Verification runtime error - {str(pre)}")
+        logger.error(f"Unknown hash error: {str(uhe)}", exc_info=True)
+        raise InternalServerError(f"Failed to verify password: {str(uhe)}")
+    except PasslibSecurityError as pre:
+        logger.error(f"Runtime error: {str(pre)}", exc_info=True)
+        raise InternalServerError(f"Failed to verify password: {str(pre)}")
     except Exception as e:
-        logger.error(f"Unexpected error verifying password: {str(e)}", exc_info=True)
+        logger.error(f"Unexpected error: {str(e)}", exc_info=True)
         raise InternalServerError(f"Failed to verify password: {str(e)}")
 
 
-hashed = hash_password("test123")
-print(verify_password("test123", hashed))
-print(verify_password("wrong", hashed))
+# Test the functions
+if __name__ == "__main__":
+    try:
+        hashed = hash_password("test123")
+        print(f"Hashed password: {hashed}")
+        print(f"Verify 'test123': {verify_password('test123', hashed)}")  # Should print True
+        print(f"Verify 'wrong': {verify_password('wrong', hashed)}")  # Should print False
+    except Exception as e:
+        print(f"Error during test: {str(e)}")

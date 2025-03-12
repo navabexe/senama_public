@@ -3,6 +3,7 @@ import logging
 import mimetypes
 import os
 from datetime import datetime, timezone
+from typing import Dict
 
 from bson import ObjectId
 from fastapi import UploadFile
@@ -10,25 +11,27 @@ from pymongo.database import Database
 from pymongo.errors import OperationFailure
 
 from core.errors import ValidationError, InternalServerError, NotFoundError
+from core.utils import db
+from core.utils.validation import validate_object_id
 from core.utils.db import DBHelper
+from domain.schemas.upload import UploadMetadata
 
 logger = logging.getLogger(__name__)
 
 UPLOAD_DIR = "uploads"
 MAX_FILE_SIZE = 10 * 1024 * 1024  # 10 MB
 
-
 class UploadService:
-    def __init__(self, db: Database):
+    def __init__(cls, db: Database):
         """Initialize UploadService with a database instance and create upload directory if it doesn't exist."""
-        self.db_helper = DBHelper()
-        self.db = db
+        cls.db_helper = DBHelper()
+        cls.db = db
         if not os.path.exists(UPLOAD_DIR):
             os.makedirs(UPLOAD_DIR)
             logger.info(f"Created upload directory: {UPLOAD_DIR}")
 
-    async def upload_file(self, user_id: str, file: UploadFile, entity_type: str, entity_id: str) -> dict:
-        """Upload a file and associate it with a user, vendor, or product.
+    async def upload_file(cls, user_id: str, file: UploadFile, entity_type: str, entity_id: str) -> Dict[str, str]:
+        """Upload a file and associate it with a user, vendor, or product with atomic check.
 
         Args:
             user_id (str): ID of the user uploading the file.
@@ -37,7 +40,7 @@ class UploadService:
             entity_id (str): ID of the entity to associate the file with.
 
         Returns:
-            dict: Dictionary containing the uploaded file URL.
+            Dict[str, str]: Dictionary containing the uploaded file URL.
 
         Raises:
             ValidationError: If file size, type, or entity details are invalid.
@@ -45,10 +48,9 @@ class UploadService:
             InternalServerError: For unexpected errors or file system failures.
         """
         try:
-            if not ObjectId.is_valid(user_id):
-                raise ValidationError(f"Invalid user_id format: {user_id}")
-            if not ObjectId.is_valid(entity_id):
-                raise ValidationError(f"Invalid entity_id format: {entity_id}")
+            validate_object_id(user_id, "user_id")
+            validate_object_id(entity_id, "entity_id")
+            upload_metadata = UploadMetadata(user_id=user_id, entity_type=entity_type, entity_id=entity_id)
 
             file_size = file.size
             if file_size is None or file_size > MAX_FILE_SIZE:
@@ -64,42 +66,44 @@ class UploadService:
                 raise ValidationError(f"Invalid file content type: {mime_type}. Allowed types: {allowed_types}")
             await file.seek(0)
 
-            if entity_type == "user":
-                entity = self.db_helper.find_one("users", {"_id": ObjectId(entity_id)})
-            elif entity_type == "vendor":
-                entity = self.db_helper.find_one("vendors", {"_id": ObjectId(entity_id)})
-            elif entity_type == "product":
-                entity = self.db_helper.find_one("products", {"_id": ObjectId(entity_id)})
-            else:
-                raise ValidationError("Invalid entity type. Must be 'user', 'vendor', or 'product'")
-
+            collection_name = entity_type + "s"
+            entity = cls.db_helper.find_one(collection_name, {"_id": ObjectId(entity_id)})
             if not entity:
                 raise NotFoundError(f"{entity_type.capitalize()} with ID {entity_id} not found")
             if entity_type != "user" and str(entity["_id"]) != user_id and entity.get("vendor_id") != user_id:
                 raise ValidationError("You can only upload files for your own entity")
 
-            # ذخیره فایل
+            # ذخیره فایل و به‌روزرسانی دیتابیس به صورت اتمی
             file_extension = file.filename.split(".")[-1]
             file_name = f"{entity_type}_{entity_id}_{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}.{file_extension}"
             file_path = os.path.join(UPLOAD_DIR, file_name)
-
-            with open(file_path, "wb") as buffer:
-                buffer.write(await file.read())
-
             file_url = f"/{UPLOAD_DIR}/{file_name}"
-            update_field = "avatar_urls" if entity_type in ["user", "vendor"] else "images"
-            current_urls = entity.get(update_field, [])
-            updated = self.db_helper.update_one(
-                entity_type + "s",
-                {"_id": ObjectId(entity_id)},
-                {update_field: current_urls + [file_url]}
-            )
-            if not updated:
-                os.remove(file_path)  # Rollback file if database update fails
-                raise InternalServerError(f"Failed to update {entity_type} with file URL")
 
-            logger.info(
-                f"File uploaded: {file_path} for {entity_type} {entity_id} by user {user_id}, size: {file_size} bytes")
+            with db.client.start_session() as session:
+                with session.start_transaction():
+                    # بررسی اتمی برای جلوگیری از آپلود همزمان (اختیاری، بر اساس URL)
+                    existing_url = cls.db_helper.find_one(collection_name, {f"{entity_type == 'product' and 'images' or 'avatar_urls'}": file_url}, session=session)
+                    if existing_url:
+                        raise ValidationError(f"A file with URL {file_url} already exists for this entity")
+
+                    # ذخیره فایل
+                    with open(file_path, "wb") as buffer:
+                        buffer.write(await file.read())
+
+                    # به‌روزرسانی دیتابیس
+                    update_field = "avatar_urls" if entity_type in ["user", "vendor"] else "images"
+                    current_urls = entity.get(update_field, [])
+                    updated = cls.db_helper.update_one(
+                        collection_name,
+                        {"_id": ObjectId(entity_id)},
+                        {update_field: current_urls + [file_url]},
+                        session=session
+                    )
+                    if not updated:
+                        os.remove(file_path)  # Rollback file if database update fails
+                        raise InternalServerError(f"Failed to update {entity_type} with file URL")
+
+            logger.info(f"File uploaded: {file_path} for {entity_type} {entity_id} by user {user_id}, size: {file_size} bytes")
             return {"file_url": file_url}
         except ValidationError as ve:
             logger.error(f"Validation error in upload_file: {ve.detail}, filename: {file.filename}")
@@ -114,11 +118,11 @@ class UploadService:
             logger.error(f"Unexpected error in upload_file: {str(e)}, filename: {file.filename}", exc_info=True)
             raise InternalServerError(f"Failed to upload file: {str(e)}")
 
-    def cleanup_unused_files(self) -> dict:
+    def cleanup_unused_files(cls) -> Dict[str, str]:
         """Clean up unused files from the upload directory.
 
         Returns:
-            dict: Confirmation message with count of deleted files.
+            Dict[str, str]: Confirmation message with count of deleted files.
 
         Raises:
             InternalServerError: For unexpected errors or file system failures.
@@ -126,7 +130,7 @@ class UploadService:
         try:
             used_files = set()
             for collection in ["users", "vendors", "products"]:
-                for entity in self.db[collection].find():
+                for entity in cls.db[collection].find():
                     urls = entity.get("avatar_urls", []) + entity.get("images", [])
                     used_files.update(urls)
 

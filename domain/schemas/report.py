@@ -2,7 +2,7 @@
 from datetime import datetime
 from typing import Optional
 
-from pydantic import BaseModel, Field, validator
+from pydantic import BaseModel, Field,  field_validator
 
 
 class ReportCreate(BaseModel):
@@ -11,26 +11,26 @@ class ReportCreate(BaseModel):
     reason: str = Field(..., description="Reason for the report")
     details: Optional[str] = Field(None, description="Additional details about the report")
 
-    @validator("reported_id", pre=True)
+    @field_validator("reported_id", mode="before")
     def validate_reported_id(cls, value):
         if not isinstance(value, str) or not value.strip():
             raise ValueError("Reported ID must be a non-empty string")
         return value
 
-    @validator("type")
+    @field_validator("type")
     def validate_type(cls, value):
         valid_types = ["user", "vendor", "product", "content"]
         if value not in valid_types:
             raise ValueError(f"Type must be one of {valid_types}")
         return value
 
-    @validator("reason")
+    @field_validator("reason")
     def validate_reason(cls, value):
         if not value or not isinstance(value, str):
             raise ValueError("Reason must be a non-empty string")
         return value.strip()
 
-    @validator("details")
+    @field_validator("details")
     def validate_details(cls, value):
         if value is not None and (not isinstance(value, str) or not value.strip()):
             raise ValueError("Details must be a non-empty string if provided")
@@ -40,7 +40,7 @@ class ReportCreate(BaseModel):
 class ReportUpdate(BaseModel):
     status: Optional[str] = Field(None, description="Updated status of the report")
 
-    @validator("status")
+    @field_validator("status")
     def validate_status(cls, value):
         valid_statuses = ["pending", "reviewed", "resolved"]
         if value is not None and value not in valid_statuses:

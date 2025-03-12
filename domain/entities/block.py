@@ -2,7 +2,7 @@
 from datetime import datetime, timezone
 from typing import Optional
 
-from pydantic import BaseModel, Field, validator
+from pydantic import BaseModel, Field,  field_validator
 
 
 class Block(BaseModel):
@@ -15,15 +15,15 @@ class Block(BaseModel):
     updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc),
                                  description="Last update time (UTC)")
 
-    @validator("id", "blocker_id", "blocked_id", pre=True)
+    @field_validator("id", "blocker_id", "blocked_id", mode="before")
     def validate_id_format(cls, value):
         """Validate that ID fields are valid strings."""
         if value is not None and (not isinstance(value, str) or not value.strip()):
             raise ValueError(f"ID must be a non-empty string, got: {value}")
         return value
 
-    @validator("blocker_id")
-    def prevent_self_block(cls, value, values):
+    @field_validator("blocker_id")
+    def prevent_cls_block(cls, value, values):
         """Ensure blocker_id is not the same as blocked_id."""
         if "blocked_id" in values and value == values["blocked_id"]:
             raise ValueError("blocker_id cannot be the same as blocked_id")

@@ -1,70 +1,51 @@
 # services/advertisements.py
 import logging
 from datetime import datetime, timezone
+from typing import Dict, Any, List
 
 from bson import ObjectId
 from pymongo.database import Database
 from pymongo.errors import DuplicateKeyError, OperationFailure
 
 from core.errors import NotFoundError, ValidationError, UnauthorizedError, InternalServerError
+from core.utils.validation import validate_object_id
 from domain.entities.advertisement import Advertisement
+from domain.schemas.advertisement import AdvertisementCreate, AdvertisementUpdate
 
 logger = logging.getLogger(__name__)
 
-
-def create_advertisement(db: Database, vendor_id: str, ad_data: dict) -> dict:
-    """Create a new advertisement for a vendor.
-
-    Args:
-        db (Database): MongoDB database instance.
-        vendor_id (str): ID of the vendor creating the advertisement as a string.
-        ad_data (dict): Advertisement data including type, related_id, cost, etc.
-
-    Returns:
-        dict: Dictionary containing the created advertisement ID as a string.
-
-    Raises:
-        ValidationError: If input data or IDs are invalid.
-        NotFoundError: If vendor or related entity is not found.
-        UnauthorizedError: If vendor tries to advertise another's content.
-        InternalServerError: For unexpected database or system errors.
-    """
+def create_advertisement(db: Database, vendor_id: str, ad_data: Dict[str, Any]) -> Dict[str, str]:
+    """Create a new advertisement for a vendor with transaction."""
     try:
-        # اعتبارسنجی vendor_id
-        if not ObjectId.is_valid(vendor_id):
-            raise ValidationError(f"Invalid vendor_id format: {vendor_id}")
+        validate_object_id(vendor_id, "vendor_id")
+        ad_create = AdvertisementCreate(**ad_data)
+        ad_data_validated = ad_create.model_dump()
+
         vendor = db.vendors.find_one({"_id": ObjectId(vendor_id)})
         if not vendor:
             raise NotFoundError(f"Vendor with ID {vendor_id} not found")
-        if vendor["wallet_balance"] < ad_data["cost"]:
+        if vendor["wallet_balance"] < ad_data_validated["cost"]:
             raise ValidationError("Insufficient wallet balance")
 
-        # اعتبارسنجی related_id
-        if not ObjectId.is_valid(ad_data["related_id"]):
-            raise ValidationError(f"Invalid related_id format: {ad_data['related_id']}")
-        related_collection = "stories" if ad_data["type"] == "story" else "products"
-        related = db[related_collection].find_one({"_id": ObjectId(ad_data["related_id"])})
+        validate_object_id(ad_data_validated["related_id"], "related_id")
+        related_collection = "stories" if ad_data_validated["type"] == "story" else "products"
+        related = db[related_collection].find_one({"_id": ObjectId(ad_data_validated["related_id"])})
         if not related:
-            raise NotFoundError(f"Related {ad_data['type']} with ID {ad_data['related_id']} not found")
+            raise NotFoundError(f"Related {ad_data_validated['type']} with ID {ad_data_validated['related_id']} not found")
         if related["vendor_id"] != vendor_id:
             raise UnauthorizedError("You can only advertise your own content")
 
-        ad_data["vendor_id"] = vendor_id
-        advertisement = Advertisement(**ad_data)
-        result = db.advertisements.insert_one(advertisement.model_dump(exclude={"id"}))
-        ad_id = str(result.inserted_id)
-        logger.info(f"Advertisement created with ID: {ad_id} by vendor: {vendor_id}")
-        return {"id": ad_id}
+        advertisement = Advertisement(**ad_data_validated, vendor_id=vendor_id)
+        with db.client.start_session() as session:
+            with session.start_transaction():
+                result = db.advertisements.insert_one(advertisement.model_dump(exclude={"id"}), session=session)
+                ad_id = str(result.inserted_id)
+                logger.info(f"Advertisement created with ID: {ad_id} by vendor: {vendor_id}")
+                return {"id": ad_id}
 
-    except ValidationError as ve:
-        logger.error(f"Validation error: {ve.detail}")
-        raise ve
-    except NotFoundError as ne:
-        logger.error(f"Not found error: {ne.detail}")
-        raise ne
-    except UnauthorizedError as ue:
-        logger.error(f"Unauthorized error: {ue.detail}")
-        raise ue
+    except (ValidationError, NotFoundError, UnauthorizedError) as e:
+        logger.error(f"Error in create_advertisement: {e.detail}")
+        raise e
     except DuplicateKeyError:
         logger.error("Duplicate advertisement detected")
         raise ValidationError("An advertisement with this data already exists")
@@ -75,29 +56,11 @@ def create_advertisement(db: Database, vendor_id: str, ad_data: dict) -> dict:
         logger.error(f"Unexpected error: {str(e)}", exc_info=True)
         raise InternalServerError(f"Unexpected error occurred: {str(e)}")
 
-
 def get_advertisement(db: Database, ad_id: str, vendor_id: str) -> Advertisement:
-    """Retrieve an advertisement by its ID.
-
-    Args:
-        db (Database): MongoDB database instance.
-        ad_id (str): ID of the advertisement to retrieve as a string.
-        vendor_id (str): ID of the vendor requesting the advertisement as a string.
-
-    Returns:
-        Advertisement: The requested advertisement object.
-
-    Raises:
-        ValidationError: If ad_id or vendor_id format is invalid.
-        NotFoundError: If advertisement is not found.
-        UnauthorizedError: If vendor is not authorized to view the advertisement.
-        InternalServerError: For unexpected errors.
-    """
+    """Retrieve an advertisement by its ID."""
     try:
-        if not ObjectId.is_valid(ad_id):
-            raise ValidationError(f"Invalid advertisement ID format: {ad_id}")
-        if not ObjectId.is_valid(vendor_id):
-            raise ValidationError(f"Invalid vendor_id format: {vendor_id}")
+        validate_object_id(ad_id, "advertisement_id")
+        validate_object_id(vendor_id, "vendor_id")
 
         advertisement = db.advertisements.find_one({"_id": ObjectId(ad_id)})
         if not advertisement:
@@ -105,7 +68,6 @@ def get_advertisement(db: Database, ad_id: str, vendor_id: str) -> Advertisement
         if advertisement["vendor_id"] != vendor_id:
             raise UnauthorizedError("You can only view your own advertisements")
 
-        # بررسی وضعیت بر اساس زمان
         now = datetime.now(timezone.utc)
         if advertisement["status"] == "active" and advertisement["ends_at"] < now:
             db.advertisements.update_one({"_id": ObjectId(ad_id)}, {"$set": {"status": "expired"}})
@@ -113,16 +75,9 @@ def get_advertisement(db: Database, ad_id: str, vendor_id: str) -> Advertisement
 
         logger.info(f"Advertisement retrieved: {ad_id}")
         return Advertisement(**advertisement)
-
-    except ValidationError as ve:
-        logger.error(f"Validation error: {ve.detail}")
-        raise ve
-    except NotFoundError as ne:
-        logger.error(f"Not found error: {ne.detail}")
-        raise ne
-    except UnauthorizedError as ue:
-        logger.error(f"Unauthorized error: {ue.detail}")
-        raise ue
+    except (ValidationError, NotFoundError, UnauthorizedError) as e:
+        logger.error(f"Error in get_advertisement: {e.detail}")
+        raise e
     except OperationFailure as of:
         logger.error(f"Database operation failed: {str(of)}", exc_info=True)
         raise InternalServerError(f"Database error: {str(of)}")
@@ -130,30 +85,13 @@ def get_advertisement(db: Database, ad_id: str, vendor_id: str) -> Advertisement
         logger.error(f"Unexpected error: {str(e)}", exc_info=True)
         raise InternalServerError(f"Failed to get advertisement: {str(e)}")
 
-
-def update_advertisement(db: Database, ad_id: str, vendor_id: str, update_data: dict) -> Advertisement:
-    """Update an existing advertisement.
-
-    Args:
-        db (Database): MongoDB database instance.
-        ad_id (str): ID of the advertisement to update as a string.
-        vendor_id (str): ID of the vendor updating the advertisement as a string.
-        update_data (dict): Data to update in the advertisement.
-
-    Returns:
-        Advertisement: The updated advertisement object.
-
-    Raises:
-        ValidationError: If input data or IDs are invalid.
-        NotFoundError: If advertisement is not found.
-        UnauthorizedError: If vendor is not authorized.
-        InternalServerError: For unexpected errors.
-    """
+def update_advertisement(db: Database, ad_id: str, vendor_id: str, update_data: Dict[str, Any]) -> Advertisement:
+    """Update an existing advertisement with transaction for wallet updates."""
     try:
-        if not ObjectId.is_valid(ad_id):
-            raise ValidationError(f"Invalid advertisement ID format: {ad_id}")
-        if not ObjectId.is_valid(vendor_id):
-            raise ValidationError(f"Invalid vendor_id format: {vendor_id}")
+        validate_object_id(ad_id, "advertisement_id")
+        validate_object_id(vendor_id, "vendor_id")
+        ad_update = AdvertisementUpdate(**update_data)
+        update_data_validated = ad_update.model_dump(exclude_unset=True)
 
         advertisement = db.advertisements.find_one({"_id": ObjectId(ad_id)})
         if not advertisement:
@@ -161,29 +99,25 @@ def update_advertisement(db: Database, ad_id: str, vendor_id: str, update_data: 
         if advertisement["vendor_id"] != vendor_id:
             raise UnauthorizedError("You can only update your own advertisements")
 
-        update_data["updated_at"] = datetime.now(timezone.utc)
+        update_data_validated["updated_at"] = datetime.now(timezone.utc)
 
-        # کسر هزینه از کیف پول اگه به active تغییر کنه
-        if "status" in update_data and update_data["status"] == "active" and advertisement["status"] != "active":
-            vendor = db.vendors.find_one({"_id": ObjectId(vendor_id)})
-            if vendor["wallet_balance"] < advertisement["cost"]:
-                raise ValidationError("Insufficient wallet balance")
-            db.vendors.update_one({"_id": ObjectId(vendor_id)}, {"$inc": {"wallet_balance": -advertisement["cost"]}})
+        if "status" in update_data_validated and update_data_validated["status"] == "active" and advertisement["status"] != "active":
+            with db.client.start_session() as session:
+                with session.start_transaction():
+                    vendor = db.vendors.find_one({"_id": ObjectId(vendor_id)}, session=session)
+                    if vendor["wallet_balance"] < advertisement["cost"]:
+                        raise ValidationError("Insufficient wallet balance")
+                    db.vendors.update_one({"_id": ObjectId(vendor_id)}, {"$inc": {"wallet_balance": -advertisement["cost"]}}, session=session)
+                    db.advertisements.update_one({"_id": ObjectId(ad_id)}, {"$set": update_data_validated}, session=session)
+        else:
+            db.advertisements.update_one({"_id": ObjectId(ad_id)}, {"$set": update_data_validated})
 
-        db.advertisements.update_one({"_id": ObjectId(ad_id)}, {"$set": update_data})
         updated_advertisement = db.advertisements.find_one({"_id": ObjectId(ad_id)})
         logger.info(f"Advertisement updated: {ad_id}")
         return Advertisement(**updated_advertisement)
-
-    except ValidationError as ve:
-        logger.error(f"Validation error: {ve.detail}")
-        raise ve
-    except NotFoundError as ne:
-        logger.error(f"Not found error: {ne.detail}")
-        raise ne
-    except UnauthorizedError as ue:
-        logger.error(f"Unauthorized error: {ue.detail}")
-        raise ue
+    except (ValidationError, NotFoundError, UnauthorizedError) as e:
+        logger.error(f"Error in update_advertisement: {e.detail}")
+        raise e
     except OperationFailure as of:
         logger.error(f"Database operation failed: {str(of)}", exc_info=True)
         raise InternalServerError(f"Database error: {str(of)}")
@@ -191,29 +125,11 @@ def update_advertisement(db: Database, ad_id: str, vendor_id: str, update_data: 
         logger.error(f"Unexpected error: {str(e)}", exc_info=True)
         raise InternalServerError(f"Failed to update advertisement: {str(e)}")
 
-
-def delete_advertisement(db: Database, ad_id: str, vendor_id: str) -> dict:
-    """Delete an advertisement.
-
-    Args:
-        db (Database): MongoDB database instance.
-        ad_id (str): ID of the advertisement to delete as a string.
-        vendor_id (str): ID of the vendor deleting the advertisement as a string.
-
-    Returns:
-        dict: Confirmation message of deletion.
-
-    Raises:
-        ValidationError: If IDs or status are invalid.
-        NotFoundError: If advertisement is not found.
-        UnauthorizedError: If vendor is not authorized.
-        InternalServerError: For unexpected errors.
-    """
+def delete_advertisement(db: Database, ad_id: str, vendor_id: str) -> Dict[str, str]:
+    """Delete an advertisement."""
     try:
-        if not ObjectId.is_valid(ad_id):
-            raise ValidationError(f"Invalid advertisement ID format: {ad_id}")
-        if not ObjectId.is_valid(vendor_id):
-            raise ValidationError(f"Invalid vendor_id format: {vendor_id}")
+        validate_object_id(ad_id, "advertisement_id")
+        validate_object_id(vendor_id, "vendor_id")
 
         advertisement = db.advertisements.find_one({"_id": ObjectId(ad_id)})
         if not advertisement:
@@ -226,16 +142,9 @@ def delete_advertisement(db: Database, ad_id: str, vendor_id: str) -> dict:
         db.advertisements.delete_one({"_id": ObjectId(ad_id)})
         logger.info(f"Advertisement deleted: {ad_id}")
         return {"message": f"Advertisement {ad_id} deleted successfully"}
-
-    except ValidationError as ve:
-        logger.error(f"Validation error: {ve.detail}")
-        raise ve
-    except NotFoundError as ne:
-        logger.error(f"Not found error: {ne.detail}")
-        raise ne
-    except UnauthorizedError as ue:
-        logger.error(f"Unauthorized error: {ue.detail}")
-        raise ue
+    except (ValidationError, NotFoundError, UnauthorizedError) as e:
+        logger.error(f"Error in delete_advertisement: {e.detail}")
+        raise e
     except OperationFailure as of:
         logger.error(f"Database operation failed: {str(of)}", exc_info=True)
         raise InternalServerError(f"Database error: {str(of)}")
@@ -243,24 +152,10 @@ def delete_advertisement(db: Database, ad_id: str, vendor_id: str) -> dict:
         logger.error(f"Unexpected error: {str(e)}", exc_info=True)
         raise InternalServerError(f"Failed to delete advertisement: {str(e)}")
 
-
-def get_advertisements_by_vendor(db: Database, vendor_id: str) -> list[Advertisement]:
-    """Retrieve all advertisements for a specific vendor.
-
-    Args:
-        db (Database): MongoDB database instance.
-        vendor_id (str): ID of the vendor to retrieve advertisements for.
-
-    Returns:
-        list[Advertisement]: List of advertisement objects.
-
-    Raises:
-        ValidationError: If vendor_id is invalid.
-        InternalServerError: For unexpected errors or database failures.
-    """
+def get_advertisements_by_vendor(db: Database, vendor_id: str) -> List[Advertisement]:
+    """Retrieve all advertisements for a specific vendor."""
     try:
-        if not ObjectId.is_valid(vendor_id):
-            raise ValidationError(f"Invalid vendor_id format: {vendor_id}")
+        validate_object_id(vendor_id, "vendor_id")
 
         advertisements = list(db.advertisements.find({"vendor_id": vendor_id}))
         if not advertisements:
@@ -270,11 +165,11 @@ def get_advertisements_by_vendor(db: Database, vendor_id: str) -> list[Advertise
         logger.info(f"Retrieved {len(advertisements)} advertisements for vendor_id: {vendor_id}")
         return [Advertisement(**advertisement) for advertisement in advertisements]
     except ValidationError as ve:
-        logger.error(f"Validation error in get_advertisements_by_vendor: {ve.detail}")
+        logger.error(f"Validation error: {ve.detail}")
         raise ve
     except OperationFailure as of:
-        logger.error(f"Database operation failed in get_advertisements_by_vendor: {str(of)}", exc_info=True)
+        logger.error(f"Database operation failed: {str(of)}", exc_info=True)
         raise InternalServerError(f"Failed to get advertisements: {str(of)}")
     except Exception as e:
-        logger.error(f"Unexpected error in get_advertisements_by_vendor: {str(e)}", exc_info=True)
+        logger.error(f"Unexpected error: {str(e)}", exc_info=True)
         raise InternalServerError(f"Failed to get advertisements: {str(e)}")

@@ -2,7 +2,7 @@
 from datetime import datetime
 from typing import Optional, List
 
-from pydantic import BaseModel, Field, validator
+from pydantic import BaseModel, Field,  field_validator
 
 
 class UserCreate(BaseModel):
@@ -10,13 +10,13 @@ class UserCreate(BaseModel):
     first_name: Optional[str] = Field(None, description="First name of the user")
     last_name: Optional[str] = Field(None, description="Last name of the user")
 
-    @validator("phone")
+    @field_validator("phone")
     def validate_phone(cls, value):
         if not value or not isinstance(value, str):
             raise ValueError("Phone must be a non-empty string")
         return value.strip()
 
-    @validator("first_name", "last_name")
+    @field_validator("first_name", "last_name")
     def validate_names(cls, value):
         if value is not None and (not isinstance(value, str) or not value.strip()):
             raise ValueError("Name must be a non-empty string if provided")
@@ -30,20 +30,20 @@ class UserUpdate(BaseModel):
     avatar_urls: Optional[List[str]] = Field(None, description="Updated list of avatar URLs")
     following_vendor_ids: Optional[List[str]] = Field(None, description="Updated list of followed vendor IDs")
 
-    @validator("first_name", "last_name")
+    @field_validator("first_name", "last_name")
     def validate_names(cls, value):
         if value is not None and (not isinstance(value, str) or not value.strip()):
             raise ValueError("Name must be a non-empty string if provided")
         return value
 
-    @validator("status")
+    @field_validator("status")
     def validate_status(cls, value):
         valid_statuses = ["active", "inactive"]
         if value is not None and value not in valid_statuses:
             raise ValueError(f"Status must be one of {valid_statuses}")
         return value
 
-    @validator("avatar_urls", "following_vendor_ids")
+    @field_validator("avatar_urls", "following_vendor_ids")
     def validate_lists(cls, value):
         if value is not None:
             if not isinstance(value, list) or not all(isinstance(v, str) and v.strip() for v in value):

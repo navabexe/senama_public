@@ -2,7 +2,7 @@
 from datetime import datetime
 from typing import Optional
 
-from pydantic import BaseModel, Field, validator
+from pydantic import BaseModel, Field,  field_validator
 
 
 class OrderCreate(BaseModel):
@@ -12,13 +12,13 @@ class OrderCreate(BaseModel):
     shipping_address: Optional[str] = Field(None, description="Shipping address for the order")
     notes: Optional[str] = Field(None, description="Optional notes for the order")
 
-    @validator("vendor_id", "product_id", pre=True)
+    @field_validator("vendor_id", "product_id", mode="before")
     def validate_id_format(cls, value):
         if not isinstance(value, str) or not value.strip():
             raise ValueError("ID must be a non-empty string")
         return value
 
-    @validator("shipping_address", "notes")
+    @field_validator("shipping_address", "notes")
     def validate_optional_strings(cls, value):
         if value is not None and (not isinstance(value, str) or not value.strip()):
             raise ValueError("Field must be a non-empty string if provided")
@@ -31,20 +31,20 @@ class OrderUpdate(BaseModel):
     notes: Optional[str] = Field(None, description="Updated notes")
     payment_status: Optional[str] = Field(None, description="Updated payment status")
 
-    @validator("status")
+    @field_validator("status")
     def validate_status(cls, value):
         valid_statuses = ["pending", "accepted", "delivered", "cancelled"]
         if value is not None and value not in valid_statuses:
             raise ValueError(f"Status must be one of {valid_statuses}")
         return value
 
-    @validator("shipping_address", "notes")
+    @field_validator("shipping_address", "notes")
     def validate_optional_strings(cls, value):
         if value is not None and (not isinstance(value, str) or not value.strip()):
             raise ValueError("Field must be a non-empty string if provided")
         return value
 
-    @validator("payment_status")
+    @field_validator("payment_status")
     def validate_payment_status(cls, value):
         valid_statuses = ["unpaid", "paid", "failed"]
         if value is not None and value not in valid_statuses:

@@ -1,60 +1,73 @@
 # services/reports.py
 import logging
 from datetime import datetime, timezone
+from typing import Dict, Any, List
 
 from bson import ObjectId
 from pymongo.database import Database
-from pymongo.errors import OperationFailure, DuplicateKeyError
+from pymongo.errors import OperationFailure
 
 from core.errors import NotFoundError, ValidationError, UnauthorizedError, InternalServerError
+from core.utils.validation import validate_object_id
 from domain.entities.report import Report
+from domain.schemas.report import ReportCreate, ReportUpdate
 
 logger = logging.getLogger(__name__)
 
-
-def create_report(db: Database, reporter_id: str, report_data: dict) -> dict:
-    """Create a new report for a user or vendor.
+def create_report(db: Database, reporter_id: str, report_data: Dict[str, Any]) -> Dict[str, str]:
+    """Create a new report for a user or vendor with atomic check to prevent duplicates.
 
     Args:
         db (Database): MongoDB database instance.
         reporter_id (str): ID of the user or vendor submitting the report.
-        report_data (dict): Data for the report including target_id, target_type, and reason.
+        report_data (Dict[str, Any]): Data for the report including target_id, target_type, and reason.
 
     Returns:
-        dict: Dictionary containing the created report ID.
+        Dict[str, str]: Dictionary containing the created report ID.
 
     Raises:
-        ValidationError: If required fields are missing or invalid.
+        ValidationError: If required fields are missing, invalid, or report already exists.
         NotFoundError: If the target entity is not found.
         InternalServerError: For unexpected errors or database failures.
     """
-    global target
     try:
-        if not ObjectId.is_valid(reporter_id):
-            raise ValidationError(f"Invalid reporter_id format: {reporter_id}")
-        if not report_data.get("target_id") or not report_data.get("target_type") or not report_data.get("reason"):
-            raise ValidationError("Target ID, target type, and reason are required")
-        if not ObjectId.is_valid(report_data["target_id"]):
-            raise ValidationError(f"Invalid target_id format: {report_data['target_id']}")
-        if report_data["target_type"] not in ["user", "vendor", "product"]:
-            raise ValidationError("Invalid target type")
-        if reporter_id == report_data["target_id"]:
-            raise ValidationError("You cannot report yourself")
+        validate_object_id(reporter_id, "reporter_id")
+        report_create = ReportCreate(**report_data)  # اعتبارسنجی با Pydantic
+        report_data_validated = report_create.model_dump()
+
+        validate_object_id(report_data_validated["target_id"], "target_id")
+        if reporter_id == report_data_validated["target_id"]:
+            raise ValidationError("You cannot report yourcls")
 
         # بررسی وجود موجودیت هدف
-        if report_data["target_type"] == "user":
-            target = db.users.find_one({"_id": ObjectId(report_data["target_id"])})
-        elif report_data["target_type"] == "vendor":
-            target = db.vendors.find_one({"_id": ObjectId(report_data["target_id"])})
-        elif report_data["target_type"] == "product":
-            target = db.products.find_one({"_id": ObjectId(report_data["target_id"])})
+        target = None
+        if report_data_validated["target_type"] == "user":
+            target = db.users.find_one({"_id": ObjectId(report_data_validated["target_id"])})
+        elif report_data_validated["target_type"] == "vendor":
+            target = db.vendors.find_one({"_id": ObjectId(report_data_validated["target_id"])})
+        elif report_data_validated["target_type"] == "product":
+            target = db.products.find_one({"_id": ObjectId(report_data_validated["target_id"])})
         if not target:
-            raise NotFoundError(f"Target {report_data['target_type']} with ID {report_data['target_id']} not found")
+            raise NotFoundError(f"Target {report_data_validated['target_type']} with ID {report_data_validated['target_id']} not found")
 
-        report_data["reporter_id"] = reporter_id
-        report = Report(**report_data)
-        result = db.reports.insert_one(report.model_dump(exclude={"id"}))
-        report_id = str(result.inserted_id)
+        report_data_validated["reporter_id"] = reporter_id
+        report = Report(**report_data_validated)
+
+        with db.client.start_session() as session:
+            with session.start_transaction():
+                # بررسی اتمی برای جلوگیری از گزارش تکراری
+                query = {
+                    "reporter_id": reporter_id,
+                    "target_id": report_data_validated["target_id"],
+                    "target_type": report_data_validated["target_type"]
+                }
+                existing_report = db.reports.find_one(query, session=session)
+                if existing_report:
+                    raise ValidationError(f"A report for this target already exists by reporter {reporter_id}")
+
+                result = db.reports.insert_one(report.model_dump(exclude={"id"}), session=session)
+                report_id = str(result.inserted_id)
+
         logger.info(f"Report created with ID: {report_id} by: {reporter_id}")
         return {"id": report_id}
     except ValidationError as ve:
@@ -63,16 +76,12 @@ def create_report(db: Database, reporter_id: str, report_data: dict) -> dict:
     except NotFoundError as ne:
         logger.error(f"Not found error in create_report: {ne.detail}")
         raise ne
-    except DuplicateKeyError:
-        logger.error("Duplicate report detected")
-        raise ValidationError("A report with this data already exists")
     except OperationFailure as of:
         logger.error(f"Database operation failed in create_report: {str(of)}", exc_info=True)
         raise InternalServerError(f"Failed to create report: {str(of)}")
     except Exception as e:
         logger.error(f"Unexpected error in create_report: {str(e)}", exc_info=True)
         raise InternalServerError(f"Failed to create report: {str(e)}")
-
 
 def get_report(db: Database, report_id: str, user_id: str) -> Report:
     """Retrieve a report by its ID.
@@ -92,10 +101,8 @@ def get_report(db: Database, report_id: str, user_id: str) -> Report:
         InternalServerError: For unexpected errors or database failures.
     """
     try:
-        if not ObjectId.is_valid(report_id):
-            raise ValidationError(f"Invalid report ID format: {report_id}")
-        if not ObjectId.is_valid(user_id):
-            raise ValidationError(f"Invalid user_id format: {user_id}")
+        validate_object_id(report_id, "report_id")
+        validate_object_id(user_id, "user_id")
 
         report = db.reports.find_one({"_id": ObjectId(report_id)})
         if not report:
@@ -123,8 +130,7 @@ def get_report(db: Database, report_id: str, user_id: str) -> Report:
         logger.error(f"Unexpected error in get_report: {str(e)}", exc_info=True)
         raise InternalServerError(f"Failed to get report: {str(e)}")
 
-
-def get_reports_by_reporter(db: Database, reporter_id: str) -> list[Report]:
+def get_reports_by_reporter(db: Database, reporter_id: str) -> List[Report]:
     """Retrieve all reports submitted by a specific reporter.
 
     Args:
@@ -132,15 +138,14 @@ def get_reports_by_reporter(db: Database, reporter_id: str) -> list[Report]:
         reporter_id (str): ID of the user or vendor to retrieve reports for.
 
     Returns:
-        list[Report]: List of report objects.
+        List[Report]: List of report objects.
 
     Raises:
         ValidationError: If reporter_id is invalid.
         InternalServerError: For unexpected errors or database failures.
     """
     try:
-        if not ObjectId.is_valid(reporter_id):
-            raise ValidationError(f"Invalid reporter_id format: {reporter_id}")
+        validate_object_id(reporter_id, "reporter_id")
 
         reports = list(db.reports.find({"reporter_id": reporter_id}))
         if not reports:
@@ -159,15 +164,14 @@ def get_reports_by_reporter(db: Database, reporter_id: str) -> list[Report]:
         logger.error(f"Unexpected error in get_reports_by_reporter: {str(e)}", exc_info=True)
         raise InternalServerError(f"Failed to get reports: {str(e)}")
 
-
-def update_report(db: Database, report_id: str, user_id: str, update_data: dict) -> Report:
+def update_report(db: Database, report_id: str, user_id: str, update_data: Dict[str, Any]) -> Report:
     """Update an existing report (admin only).
 
     Args:
         db (Database): MongoDB database instance.
         report_id (str): ID of the report to update.
         user_id (str): ID of the user updating the report.
-        update_data (dict): Data to update in the report.
+        update_data (Dict[str, Any]): Data to update in the report (e.g., status).
 
     Returns:
         Report: The updated report object.
@@ -179,10 +183,10 @@ def update_report(db: Database, report_id: str, user_id: str, update_data: dict)
         InternalServerError: For unexpected errors or database failures.
     """
     try:
-        if not ObjectId.is_valid(report_id):
-            raise ValidationError(f"Invalid report ID format: {report_id}")
-        if not ObjectId.is_valid(user_id):
-            raise ValidationError(f"Invalid user_id format: {user_id}")
+        validate_object_id(report_id, "report_id")
+        validate_object_id(user_id, "user_id")
+        report_update = ReportUpdate(**update_data)  # اعتبارسنجی با Pydantic
+        update_data_validated = report_update.model_dump(exclude_unset=True)
 
         report = db.reports.find_one({"_id": ObjectId(report_id)})
         if not report:
@@ -192,11 +196,8 @@ def update_report(db: Database, report_id: str, user_id: str, update_data: dict)
         if not user or "admin" not in user.get("roles", []):
             raise UnauthorizedError("Only admins can update reports")
 
-        update_data["updated_at"] = datetime.now(timezone.utc)
-        if "status" in update_data and update_data["status"] not in ["pending", "reviewed", "resolved"]:
-            raise ValidationError("Invalid status value")
-
-        updated = db.reports.update_one({"_id": ObjectId(report_id)}, {"$set": update_data})
+        update_data_validated["updated_at"] = datetime.now(timezone.utc)
+        updated = db.reports.update_one({"_id": ObjectId(report_id)}, {"$set": update_data_validated})
         if updated.matched_count == 0:
             raise InternalServerError(f"Failed to update report {report_id}")
 
@@ -219,8 +220,7 @@ def update_report(db: Database, report_id: str, user_id: str, update_data: dict)
         logger.error(f"Unexpected error in update_report: {str(e)}", exc_info=True)
         raise InternalServerError(f"Failed to update report: {str(e)}")
 
-
-def delete_report(db: Database, report_id: str, user_id: str) -> dict:
+def delete_report(db: Database, report_id: str, user_id: str) -> Dict[str, str]:
     """Delete a report.
 
     Args:
@@ -229,19 +229,17 @@ def delete_report(db: Database, report_id: str, user_id: str) -> dict:
         user_id (str): ID of the user deleting the report.
 
     Returns:
-        dict: Confirmation message of deletion.
+        Dict[str, str]: Confirmation message of deletion.
 
     Raises:
-        ValidationError: If report_id, user_id, or status is invalid.
+        ValidationError: If report_id or user_id is invalid.
         NotFoundError: If report is not found.
         UnauthorizedError: If requester is not authorized.
         InternalServerError: For unexpected errors or database failures.
     """
     try:
-        if not ObjectId.is_valid(report_id):
-            raise ValidationError(f"Invalid report ID format: {report_id}")
-        if not ObjectId.is_valid(user_id):
-            raise ValidationError(f"Invalid user_id format: {user_id}")
+        validate_object_id(report_id, "report_id")
+        validate_object_id(user_id, "user_id")
 
         report = db.reports.find_one({"_id": ObjectId(report_id)})
         if not report:

@@ -2,7 +2,7 @@
 from datetime import datetime, timezone
 from typing import Optional, List, Dict
 
-from pydantic import BaseModel, Field, validator
+from pydantic import BaseModel, Field,  field_validator
 
 
 class Product(BaseModel):
@@ -26,7 +26,7 @@ class Product(BaseModel):
     updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc),
                                  description="Last update time (UTC)")
 
-    @validator("id", "vendor_id", "category_ids", "linked_vendors", "suggested_products", pre=True)
+    @field_validator("id", "vendor_id", "category_ids", "linked_vendors", "suggested_products", mode="before")
     def validate_id_format(cls, value):
         """Validate that ID fields are valid strings."""
         if value is None:
@@ -39,21 +39,21 @@ class Product(BaseModel):
             raise ValueError(f"ID must be a non-empty string, got: {value}")
         return value
 
-    @validator("name")
+    @field_validator("name")
     def validate_name(cls, value):
         """Ensure name is a non-empty string."""
         if not value or not isinstance(value, str):
             raise ValueError("Name must be a non-empty string")
         return value.strip()
 
-    @validator("description", "currency")
+    @field_validator("description", "currency")
     def validate_optional_strings(cls, value):
         """Ensure optional string fields are valid if provided."""
         if value is not None and (not isinstance(value, str) or not value.strip()):
             raise ValueError("Field must be a non-empty string if provided")
         return value
 
-    @validator("images", "videos", "tags")
+    @field_validator("images", "videos", "tags")
     def validate_string_lists(cls, value):
         """Ensure list fields contain valid strings if provided."""
         if value is not None:
@@ -61,7 +61,7 @@ class Product(BaseModel):
                 raise ValueError("Field must be a list of non-empty strings if provided")
         return value
 
-    @validator("technical_specs")
+    @field_validator("technical_specs")
     def validate_technical_specs(cls, value):
         """Ensure technical_specs is a dictionary of strings if provided."""
         if value is not None:
@@ -71,7 +71,7 @@ class Product(BaseModel):
                 raise ValueError("technical_specs must be a dictionary with string keys and values if provided")
         return value
 
-    @validator("status")
+    @field_validator("status")
     def validate_status(cls, value):
         """Ensure status is valid."""
         valid_statuses = ["active", "inactive"]

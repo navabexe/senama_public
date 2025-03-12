@@ -2,7 +2,7 @@
 from datetime import datetime, timezone
 from typing import Optional
 
-from pydantic import BaseModel, Field, validator
+from pydantic import BaseModel, Field,  field_validator
 
 
 class Collaboration(BaseModel):
@@ -17,21 +17,21 @@ class Collaboration(BaseModel):
     updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc),
                                  description="Last update time (UTC)")
 
-    @validator("id", "requester_vendor_id", "target_vendor_id", "product_id", pre=True)
+    @field_validator("id", "requester_vendor_id", "target_vendor_id", "product_id", mode="before")
     def validate_id_format(cls, value):
         """Validate that ID fields are valid strings."""
         if value is not None and (not isinstance(value, str) or not value.strip()):
             raise ValueError(f"ID must be a non-empty string, got: {value}")
         return value
 
-    @validator("requester_vendor_id")
-    def prevent_self_collaboration(cls, value, values):
+    @field_validator("requester_vendor_id")
+    def prevent_cls_collaboration(cls, value, values):
         """Ensure requester_vendor_id is not the same as target_vendor_id."""
         if "target_vendor_id" in values and value == values["target_vendor_id"]:
             raise ValueError("requester_vendor_id cannot be the same as target_vendor_id")
         return value
 
-    @validator("status")
+    @field_validator("status")
     def validate_status(cls, value):
         """Ensure status is valid."""
         valid_statuses = ["pending", "accepted", "rejected"]

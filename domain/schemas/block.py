@@ -2,20 +2,20 @@
 from datetime import datetime
 from typing import Optional
 
-from pydantic import BaseModel, Field, validator
+from pydantic import BaseModel, Field,  field_validator
 
 
 class BlockCreate(BaseModel):
     blocked_id: str = Field(..., description="ID of the user or vendor being blocked as a string")
     reason: Optional[str] = Field(None, description="Optional reason for the block")
 
-    @validator("blocked_id", pre=True)
+    @field_validator("blocked_id", mode="before")
     def validate_blocked_id(cls, value):
         if not isinstance(value, str) or not value.strip():
             raise ValueError("Blocked ID must be a non-empty string")
         return value
 
-    @validator("reason")
+    @field_validator("reason")
     def validate_reason(cls, value):
         if value is not None and (not isinstance(value, str) or not value.strip()):
             raise ValueError("Reason must be a non-empty string if provided")

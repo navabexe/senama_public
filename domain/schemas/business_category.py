@@ -2,20 +2,20 @@
 from datetime import datetime
 from typing import Optional
 
-from pydantic import BaseModel, Field, validator
+from pydantic import BaseModel, Field,  field_validator
 
 
 class BusinessCategoryCreate(BaseModel):
     name: str = Field(..., description="Name of the business category")
     description: Optional[str] = Field(None, description="Optional description of the business category")
 
-    @validator("name")
+    @field_validator("name")
     def validate_name(cls, value):
         if not value or not isinstance(value, str):
             raise ValueError("Name must be a non-empty string")
         return value.strip()
 
-    @validator("description")
+    @field_validator("description")
     def validate_description(cls, value):
         if value is not None and (not isinstance(value, str) or not value.strip()):
             raise ValueError("Description must be a non-empty string if provided")
@@ -27,19 +27,19 @@ class BusinessCategoryUpdate(BaseModel):
     description: Optional[str] = Field(None, description="Updated description of the business category")
     status: Optional[str] = Field(None, description="Updated status of the business category")
 
-    @validator("name")
+    @field_validator("name")
     def validate_name(cls, value):
         if value is not None and (not isinstance(value, str) or not value.strip()):
             raise ValueError("Name must be a non-empty string if provided")
         return value
 
-    @validator("description")
+    @field_validator("description")
     def validate_description(cls, value):
         if value is not None and (not isinstance(value, str) or not value.strip()):
             raise ValueError("Description must be a non-empty string if provided")
         return value
 
-    @validator("status")
+    @field_validator("status")
     def validate_status(cls, value):
         valid_statuses = ["active", "inactive"]
         if value is not None and value not in valid_statuses:

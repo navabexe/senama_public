@@ -14,10 +14,10 @@ logger = logging.getLogger(__name__)
 class DBHelper:
     """Utility class for interacting with MongoDB database."""
 
-    def __init__(self):
+    def __init__(cls):
         """Initialize DBHelper with a MongoDB connection."""
         try:
-            self.db = get_db()
+            cls.db = get_db()
             logger.info("Database connection established")
         except NetworkTimeout as nt:
             logger.error(f"Network timeout connecting to database: {str(nt)}", exc_info=True)
@@ -29,7 +29,7 @@ class DBHelper:
             logger.error(f"Unexpected error initializing database: {str(e)}", exc_info=True)
             raise InternalServerError(f"Failed to initialize database: {str(e)}")
 
-    def get_collection(self, collection_name: str) -> Database:
+    def get_collection(cls, collection_name: str) -> Database:
         """Get a MongoDB collection by name.
 
         Args:
@@ -45,7 +45,7 @@ class DBHelper:
         try:
             if not collection_name or not isinstance(collection_name, str):
                 raise ValidationError("Collection name must be a non-empty string")
-            collection = self.db[collection_name]
+            collection = cls.db[collection_name]
             logger.debug(f"Accessed collection: {collection_name}")
             return collection
         except ValidationError as ve:
@@ -58,7 +58,7 @@ class DBHelper:
             logger.error(f"Unexpected error accessing collection {collection_name}: {str(e)}", exc_info=True)
             raise InternalServerError(f"Failed to access collection: {str(e)}")
 
-    def insert_one(self, collection_name: str, document: dict) -> str:
+    def insert_one(cls, collection_name: str, document: dict) -> str:
         """Insert a single document into a collection.
 
         Args:
@@ -75,7 +75,7 @@ class DBHelper:
         try:
             if not isinstance(document, dict):
                 raise ValidationError("Document must be a dictionary")
-            collection = self.get_collection(collection_name)
+            collection = cls.get_collection(collection_name)
             result = collection.insert_one(document)
             inserted_id = str(result.inserted_id)
             logger.info(f"Inserted document into {collection_name} with ID: {inserted_id}")
@@ -93,7 +93,7 @@ class DBHelper:
             logger.error(f"Unexpected error inserting into {collection_name}: {str(e)}", exc_info=True)
             raise InternalServerError(f"Failed to insert document: {str(e)}")
 
-    def find_one(self, collection_name: str, query: dict) -> dict:
+    def find_one(cls, collection_name: str, query: dict) -> dict:
         """Find a single document in a collection.
 
         Args:
@@ -115,7 +115,7 @@ class DBHelper:
             if "_id" in query:
                 query["_id"] = ObjectId(query["_id"])
 
-            collection = self.get_collection(collection_name)
+            collection = cls.get_collection(collection_name)
             result = collection.find_one(query)
             if result is None:
                 logger.debug(f"No document found in {collection_name} for query: {query}")
@@ -132,7 +132,7 @@ class DBHelper:
             logger.error(f"Unexpected error finding in {collection_name}: {str(e)}", exc_info=True)
             raise InternalServerError(f"Failed to find document: {str(e)}")
 
-    def update_one(self, collection_name: str, query: dict, update: dict) -> bool:
+    def update_one(cls, collection_name: str, query: dict, update: dict) -> bool:
         """Update a single document in a collection.
 
         Args:
@@ -157,7 +157,7 @@ class DBHelper:
             if "_id" in query:
                 query["_id"] = ObjectId(query["_id"])
 
-            collection = self.get_collection(collection_name)
+            collection = cls.get_collection(collection_name)
             result = collection.update_one(query, {"$set": update})
             if result.matched_count == 0:
                 logger.debug(f"No document matched in {collection_name} for query: {query}")

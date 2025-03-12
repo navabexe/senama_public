@@ -25,14 +25,14 @@ class Settings(BaseSettings):
         extra="forbid"
     )
 
-    def __init__(self, **values):
+    def __init__(cls, **values):
         """Initialize settings and log the loaded values."""
         super().__init__(**values)
         logger.info("Settings initialized successfully")
-        logger.debug(f"Loaded settings: MONGO_URI={self.MONGO_URI}, MONGO_DB={self.MONGO_DB}, "
-                     f"ACCESS_TOKEN_EXPIRE_MINUTES={self.ACCESS_TOKEN_EXPIRE_MINUTES}, "
-                     f"REFRESH_TOKEN_EXPIRE_DAYS={self.REFRESH_TOKEN_EXPIRE_DAYS}, "
-                     f"OTP_EXPIRE_MINUTES={self.OTP_EXPIRE_MINUTES}")
+        logger.debug(f"Loaded settings: MONGO_URI={cls.MONGO_URI}, MONGO_DB={cls.MONGO_DB}, "
+                     f"ACCESS_TOKEN_EXPIRE_MINUTES={cls.ACCESS_TOKEN_EXPIRE_MINUTES}, "
+                     f"REFRESH_TOKEN_EXPIRE_DAYS={cls.REFRESH_TOKEN_EXPIRE_DAYS}, "
+                     f"OTP_EXPIRE_MINUTES={cls.OTP_EXPIRE_MINUTES}")
 
 
 def load_settings() -> Settings:

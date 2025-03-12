@@ -2,7 +2,7 @@
 from datetime import datetime
 from typing import Optional, List, Dict
 
-from pydantic import BaseModel, Field, validator
+from pydantic import BaseModel, Field,  field_validator
 
 
 class ProductCreate(BaseModel):
@@ -17,33 +17,33 @@ class ProductCreate(BaseModel):
     category_ids: Optional[List[str]] = Field(None, description="List of category IDs as strings")
     tags: Optional[List[str]] = Field(None, description="List of tags")
 
-    @validator("name")
+    @field_validator("name")
     def validate_name(cls, value):
         if not value or not isinstance(value, str):
             raise ValueError("Name must be a non-empty string")
         return value.strip()
 
-    @validator("description", "currency")
+    @field_validator("description", "currency")
     def validate_optional_strings(cls, value):
         if value is not None and (not isinstance(value, str) or not value.strip()):
             raise ValueError("Field must be a non-empty string if provided")
         return value
 
-    @validator("category_ids", pre=True)
+    @field_validator("category_ids", mode="before")
     def validate_category_ids(cls, value):
         if value is not None:
             if not isinstance(value, list) or not all(isinstance(v, str) and v.strip() for v in value):
                 raise ValueError("Category IDs must be a list of non-empty strings")
         return value
 
-    @validator("images", "videos", "tags")
+    @field_validator("images", "videos", "tags")
     def validate_string_lists(cls, value):
         if value is not None:
             if not isinstance(value, list) or not all(isinstance(v, str) and v.strip() for v in value):
                 raise ValueError("Field must be a list of non-empty strings if provided")
         return value
 
-    @validator("technical_specs")
+    @field_validator("technical_specs")
     def validate_technical_specs(cls, value):
         if value is not None:
             if not isinstance(value, dict) or not all(
@@ -65,33 +65,33 @@ class ProductUpdate(BaseModel):
     tags: Optional[List[str]] = Field(None, description="Updated list of tags")
     status: Optional[str] = Field(None, description="Updated status of the product")
 
-    @validator("name")
+    @field_validator("name")
     def validate_name(cls, value):
         if value is not None and (not isinstance(value, str) or not value.strip()):
             raise ValueError("Name must be a non-empty string if provided")
         return value
 
-    @validator("description", "currency")
+    @field_validator("description", "currency")
     def validate_optional_strings(cls, value):
         if value is not None and (not isinstance(value, str) or not value.strip()):
             raise ValueError("Field must be a non-empty string if provided")
         return value
 
-    @validator("category_ids", pre=True)
+    @field_validator("category_ids", mode="before")
     def validate_category_ids(cls, value):
         if value is not None:
             if not isinstance(value, list) or not all(isinstance(v, str) and v.strip() for v in value):
                 raise ValueError("Category IDs must be a list of non-empty strings")
         return value
 
-    @validator("images", "videos", "tags")
+    @field_validator("images", "videos", "tags")
     def validate_string_lists(cls, value):
         if value is not None:
             if not isinstance(value, list) or not all(isinstance(v, str) and v.strip() for v in value):
                 raise ValueError("Field must be a list of non-empty strings if provided")
         return value
 
-    @validator("technical_specs")
+    @field_validator("technical_specs")
     def validate_technical_specs(cls, value):
         if value is not None:
             if not isinstance(value, dict) or not all(
@@ -99,7 +99,7 @@ class ProductUpdate(BaseModel):
                 raise ValueError("Technical specs must be a dictionary with string keys and values")
         return value
 
-    @validator("status")
+    @field_validator("status")
     def validate_status(cls, value):
         valid_statuses = ["active", "inactive"]
         if value is not None and value not in valid_statuses:

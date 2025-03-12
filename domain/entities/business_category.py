@@ -2,7 +2,7 @@
 from datetime import datetime, timezone
 from typing import Optional
 
-from pydantic import BaseModel, Field, validator
+from pydantic import BaseModel, Field,  field_validator
 
 
 class BusinessCategory(BaseModel):
@@ -15,21 +15,21 @@ class BusinessCategory(BaseModel):
     updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc),
                                  description="Last update time (UTC)")
 
-    @validator("id", pre=True)
+    @field_validator("id", mode="before")
     def validate_id_format(cls, value):
         """Validate that the ID field is a valid string."""
         if value is not None and (not isinstance(value, str) or not value.strip()):
             raise ValueError(f"ID must be a non-empty string, got: {value}")
         return value
 
-    @validator("name")
+    @field_validator("name")
     def validate_name(cls, value):
         """Ensure the name is a non-empty string."""
         if not value or not isinstance(value, str):
             raise ValueError("Name must be a non-empty string")
         return value.strip()
 
-    @validator("status")
+    @field_validator("status")
     def validate_status(cls, value):
         """Ensure status is either 'active' or 'inactive'."""
         valid_statuses = ["active", "inactive"]

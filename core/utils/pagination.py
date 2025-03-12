@@ -27,7 +27,7 @@ class PaginationParams(BaseModel):
 class Pagination:
     """Class to handle pagination logic."""
 
-    def __init__(self, page: int = 1, page_size: int = 10):
+    def __init__(cls, page: int = 1, page_size: int = 10):
         """Initialize pagination with page and page_size.
 
         Args:
@@ -39,9 +39,9 @@ class Pagination:
         """
         try:
             params = PaginationParams(page=page, page_size=page_size)
-            self.page = params.page
-            self.page_size = params.page_size
-            self.skip = (self.page - 1) * self.page_size
+            cls.page = params.page
+            cls.page_size = params.page_size
+            cls.skip = (cls.page - 1) * cls.page_size
         except ValueError as ve:
             logger.error(f"Validation error initializing pagination: {str(ve)}")
             raise ValidationError(f"Invalid pagination parameters: {str(ve)}")
@@ -49,7 +49,7 @@ class Pagination:
             logger.error(f"Unexpected error initializing pagination: {str(e)}", exc_info=True)
             raise InternalServerError(f"Failed to initialize pagination: {str(e)}")
 
-    def paginate(self, query: List[Any], total: int) -> Dict[str, Any]:
+    def paginate(cls, query: List[Any], total: int) -> Dict[str, Any]:
         """Paginate a list of results.
 
         Args:
@@ -69,13 +69,13 @@ class Pagination:
             if not isinstance(total, int) or total < 0:
                 raise ValidationError("Total must be a non-negative integer")
 
-            paginated_data = query[self.skip:self.skip + self.page_size]
+            paginated_data = query[cls.skip:cls.skip + cls.page_size]
             return {
                 "data": paginated_data,
                 "total": total,
-                "page": self.page,
-                "page_size": self.page_size,
-                "total_pages": (total + self.page_size - 1) // self.page_size
+                "page": cls.page,
+                "page_size": cls.page_size,
+                "total_pages": (total + cls.page_size - 1) // cls.page_size
             }
         except ValidationError as ve:
             logger.error(f"Validation error in pagination: {ve.detail}")

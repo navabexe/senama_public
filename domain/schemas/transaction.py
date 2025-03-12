@@ -2,7 +2,7 @@
 from datetime import datetime
 from typing import Optional
 
-from pydantic import BaseModel, Field, validator
+from pydantic import BaseModel, Field,  field_validator
 
 
 class TransactionCreate(BaseModel):
@@ -10,20 +10,20 @@ class TransactionCreate(BaseModel):
     type: str = Field(..., description="Type of transaction (deposit/withdrawal)")
     description: Optional[str] = Field(None, description="Optional description of the transaction")
 
-    @validator("amount")
+    @field_validator("amount")
     def validate_amount(cls, value):
         if value <= 0:
             raise ValueError("Amount must be positive")
         return value
 
-    @validator("type")
+    @field_validator("type")
     def validate_type(cls, value):
         valid_types = ["deposit", "withdrawal"]
         if value not in valid_types:
             raise ValueError(f"Type must be one of {valid_types}")
         return value
 
-    @validator("description")
+    @field_validator("description")
     def validate_description(cls, value):
         if value is not None and (not isinstance(value, str) or not value.strip()):
             raise ValueError("Description must be a non-empty string if provided")
@@ -34,14 +34,14 @@ class TransactionUpdate(BaseModel):
     status: Optional[str] = Field(None, description="Updated status of the transaction")
     description: Optional[str] = Field(None, description="Updated description of the transaction")
 
-    @validator("status")
+    @field_validator("status")
     def validate_status(cls, value):
         valid_statuses = ["pending", "completed", "failed"]
         if value is not None and value not in valid_statuses:
             raise ValueError(f"Status must be one of {valid_statuses}")
         return value
 
-    @validator("description")
+    @field_validator("description")
     def validate_description(cls, value):
         if value is not None and (not isinstance(value, str) or not value.strip()):
             raise ValueError("Description must be a non-empty string if provided")

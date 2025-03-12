@@ -2,7 +2,7 @@
 from datetime import datetime, timezone
 from typing import Optional, List
 
-from pydantic import BaseModel, Field, validator
+from pydantic import BaseModel, Field,  field_validator
 
 
 class User(BaseModel):
@@ -18,7 +18,7 @@ class User(BaseModel):
     updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc),
                                  description="Last update time (UTC)")
 
-    @validator("id", "following_vendor_ids", pre=True)
+    @field_validator("id", "following_vendor_ids", mode="before")
     def validate_id_format(cls, value):
         if value is None:
             return value
@@ -30,32 +30,32 @@ class User(BaseModel):
             raise ValueError(f"ID must be a non-empty string, got: {value}")
         return value
 
-    @validator("phone")
+    @field_validator("phone")
     def validate_phone(cls, value):
         if not value or not isinstance(value, str):
             raise ValueError("Phone must be a non-empty string")
         return value.strip()
 
-    @validator("first_name", "last_name")
+    @field_validator("first_name", "last_name")
     def validate_names(cls, value):
         if value is not None and (not isinstance(value, str) or not value.strip()):
             raise ValueError("Name must be a non-empty string if provided")
         return value
 
-    @validator("roles")
+    @field_validator("roles")
     def validate_roles(cls, value):
         if not value or not isinstance(value, list) or not all(isinstance(r, str) and r.strip() for r in value):
             raise ValueError("Roles must be a non-empty list of strings")
         return value
 
-    @validator("status")
+    @field_validator("status")
     def validate_status(cls, value):
         valid_statuses = ["active", "inactive"]
         if value not in valid_statuses:
             raise ValueError(f"Status must be one of {valid_statuses}, got: {value}")
         return value
 
-    @validator("avatar_urls")
+    @field_validator("avatar_urls")
     def validate_avatar_urls(cls, value):
         if value is not None:
             if not isinstance(value, list) or not all(isinstance(url, str) and url.strip() for url in value):

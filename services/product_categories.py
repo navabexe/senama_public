@@ -1,55 +1,58 @@
 # services/product_categories.py
 import logging
 from datetime import datetime, timezone
+from typing import Dict, Any, List
 
 from bson import ObjectId
 from pymongo.database import Database
 from pymongo.errors import OperationFailure, DuplicateKeyError
 
 from core.errors import NotFoundError, ValidationError, InternalServerError
+from core.utils.validation import validate_object_id
 from domain.entities.product_category import ProductCategory
+from domain.schemas.product_category import ProductCategoryCreate, ProductCategoryUpdate
 
 logger = logging.getLogger(__name__)
 
-
-def create_product_category(db: Database, category_data: dict) -> dict:
-    """Create a new product category.
+def create_product_category(db: Database, category_data: Dict[str, Any]) -> Dict[str, str]:
+    """Create a new product category with atomic check to prevent duplicates.
 
     Args:
         db (Database): MongoDB database instance.
-        category_data (dict): Data for the product category including name and optional description.
+        category_data (Dict[str, Any]): Data for the product category including name and optional description.
 
     Returns:
-        dict: Dictionary containing the created category ID.
+        Dict[str, str]: Dictionary containing the created category ID.
 
     Raises:
-        ValidationError: If category name is missing or already exists.
+        ValidationError: If category name is missing, invalid, or already exists.
         InternalServerError: For unexpected errors or database failures.
     """
     try:
-        if not category_data.get("name"):
-            raise ValidationError("Category name is required")
-        if db.product_categories.find_one({"name": category_data["name"]}):
-            raise ValidationError("Category name already exists")
+        category_create = ProductCategoryCreate(**category_data)  # اعتبارسنجی با Pydantic
+        category_data_validated = category_create.model_dump()
 
-        category = ProductCategory(**category_data)
-        result = db.product_categories.insert_one(category.model_dump(exclude={"id"}))
-        category_id = str(result.inserted_id)
+        with db.client.start_session() as session:
+            with session.start_transaction():
+                # بررسی اتمی برای جلوگیری از دسته‌بندی تکراری
+                if db.product_categories.find_one({"name": category_data_validated["name"]}, session=session):
+                    raise ValidationError("Category name already exists")
+
+                category = ProductCategory(**category_data_validated)
+                result = db.product_categories.insert_one(category.model_dump(exclude={"id"}), session=session)
+                category_id = str(result.inserted_id)
+
         logger.info(f"Product category created with ID: {category_id}")
         return {"id": category_id}
     except ValidationError as ve:
         logger.error(f"Validation error in create_product_category: {ve.detail}")
         raise ve
-    except DuplicateKeyError:
-        logger.error("Duplicate product category detected")
-        raise ValidationError("A product category with this name already exists")
     except OperationFailure as of:
         logger.error(f"Database operation failed in create_product_category: {str(of)}", exc_info=True)
         raise InternalServerError(f"Failed to create product category: {str(of)}")
     except Exception as e:
         logger.error(f"Unexpected error in create_product_category: {str(e)}", exc_info=True)
         raise InternalServerError(f"Failed to create product category: {str(e)}")
-
 
 def get_product_category(db: Database, category_id: str) -> ProductCategory:
     """Retrieve a product category by its ID.
@@ -67,8 +70,7 @@ def get_product_category(db: Database, category_id: str) -> ProductCategory:
         InternalServerError: For unexpected errors or database failures.
     """
     try:
-        if not ObjectId.is_valid(category_id):
-            raise ValidationError(f"Invalid category ID format: {category_id}")
+        validate_object_id(category_id, "category_id")
 
         category = db.product_categories.find_one({"_id": ObjectId(category_id)})
         if not category:
@@ -89,15 +91,14 @@ def get_product_category(db: Database, category_id: str) -> ProductCategory:
         logger.error(f"Unexpected error in get_product_category: {str(e)}", exc_info=True)
         raise InternalServerError(f"Failed to get product category: {str(e)}")
 
-
-def get_all_product_categories(db: Database) -> list[ProductCategory]:
+def get_all_product_categories(db: Database) -> List[ProductCategory]:
     """Retrieve all product categories.
 
     Args:
         db (Database): MongoDB database instance.
 
     Returns:
-        list[ProductCategory]: List of all product category objects.
+        List[ProductCategory]: List of all product category objects.
 
     Raises:
         InternalServerError: For unexpected errors or database failures.
@@ -117,36 +118,37 @@ def get_all_product_categories(db: Database) -> list[ProductCategory]:
         logger.error(f"Unexpected error in get_all_product_categories: {str(e)}", exc_info=True)
         raise InternalServerError(f"Failed to get all product categories: {str(e)}")
 
-
-def update_product_category(db: Database, category_id: str, update_data: dict) -> ProductCategory:
+def update_product_category(db: Database, category_id: str, update_data: Dict[str, Any]) -> ProductCategory:
     """Update an existing product category.
 
     Args:
         db (Database): MongoDB database instance.
         category_id (str): ID of the product category to update.
-        update_data (dict): Data to update in the product category.
+        update_data (Dict[str, Any]): Data to update in the product category (e.g., name, description, status).
 
     Returns:
         ProductCategory: The updated product category object.
 
     Raises:
-        ValidationError: If category_id or status is invalid.
+        ValidationError: If category_id or update data is invalid.
         NotFoundError: If category is not found.
         InternalServerError: For unexpected errors or database failures.
     """
     try:
-        if not ObjectId.is_valid(category_id):
-            raise ValidationError(f"Invalid category ID format: {category_id}")
+        validate_object_id(category_id, "category_id")
+        category_update = ProductCategoryUpdate(**update_data)  # اعتبارسنجی با Pydantic
+        update_data_validated = category_update.model_dump(exclude_unset=True)
 
         category = db.product_categories.find_one({"_id": ObjectId(category_id)})
         if not category:
             raise NotFoundError(f"Product category with ID {category_id} not found")
 
-        update_data["updated_at"] = datetime.now(timezone.utc)
-        if "status" in update_data and update_data["status"] not in ["active", "inactive"]:
-            raise ValidationError("Invalid status value")
+        if "name" in update_data_validated and update_data_validated["name"] != category["name"]:
+            if db.product_categories.find_one({"name": update_data_validated["name"]}):
+                raise ValidationError("Category name already exists")
 
-        updated = db.product_categories.update_one({"_id": ObjectId(category_id)}, {"$set": update_data})
+        update_data_validated["updated_at"] = datetime.now(timezone.utc)
+        updated = db.product_categories.update_one({"_id": ObjectId(category_id)}, {"$set": update_data_validated})
         if updated.matched_count == 0:
             raise InternalServerError(f"Failed to update product category {category_id}")
 
@@ -166,31 +168,43 @@ def update_product_category(db: Database, category_id: str, update_data: dict) -
         logger.error(f"Unexpected error in update_product_category: {str(e)}", exc_info=True)
         raise InternalServerError(f"Failed to update product category: {str(e)}")
 
-
-def delete_product_category(db: Database, category_id: str) -> dict:
-    """Delete a product category.
+def delete_product_category(db: Database, category_id: str) -> Dict[str, str]:
+    """Delete a product category with transaction if related products exist.
 
     Args:
         db (Database): MongoDB database instance.
         category_id (str): ID of the product category to delete.
 
     Returns:
-        dict: Confirmation message of deletion.
+        Dict[str, str]: Confirmation message of deletion.
 
     Raises:
-        ValidationError: If category_id format is invalid.
+        ValidationError: If category_id is invalid.
         NotFoundError: If category is not found.
         InternalServerError: For unexpected errors or database failures.
     """
     try:
-        if not ObjectId.is_valid(category_id):
-            raise ValidationError(f"Invalid category ID format: {category_id}")
+        validate_object_id(category_id, "category_id")
 
         category = db.product_categories.find_one({"_id": ObjectId(category_id)})
         if not category:
             raise NotFoundError(f"Product category with ID {category_id} not found")
 
-        db.product_categories.delete_one({"_id": ObjectId(category_id)})
+        # بررسی وجود محصولات مرتبط
+        products_using_category = db.products.find_one({"category_id": category_id})
+        if products_using_category:
+            with db.client.start_session() as session:
+                with session.start_transaction():
+                    # حذف دسته‌بندی از محصولات
+                    db.products.update_many(
+                        {"category_id": category_id},
+                        {"$unset": {"category_id": ""}},
+                        session=session
+                    )
+                    db.product_categories.delete_one({"_id": ObjectId(category_id)}, session=session)
+        else:
+            db.product_categories.delete_one({"_id": ObjectId(category_id)})
+
         logger.info(f"Product category deleted: {category_id}")
         return {"message": f"Product category {category_id} deleted successfully"}
     except ValidationError as ve:

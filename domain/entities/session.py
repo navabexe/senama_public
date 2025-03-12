@@ -2,7 +2,7 @@
 from datetime import datetime, timezone
 from typing import Optional
 
-from pydantic import BaseModel, Field, validator
+from pydantic import BaseModel, Field,  field_validator
 
 
 class Session(BaseModel):
@@ -18,21 +18,21 @@ class Session(BaseModel):
     updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc),
                                  description="Last update time (UTC)")
 
-    @validator("id", "user_id", pre=True)
+    @field_validator("id", "user_id", mode="before")
     def validate_id_format(cls, value):
         """Validate that ID fields are valid strings."""
         if value is not None and (not isinstance(value, str) or not value.strip()):
             raise ValueError(f"ID must be a non-empty string, got: {value}")
         return value
 
-    @validator("access_token", "refresh_token")
+    @field_validator("access_token", "refresh_token")
     def validate_token_format(cls, value):
         """Ensure token fields are valid strings."""
         if value is not None and (not isinstance(value, str) or not value.strip()):
             raise ValueError("Token must be a non-empty string if provided")
         return value
 
-    @validator("status")
+    @field_validator("status")
     def validate_status(cls, value):
         """Ensure status is valid."""
         valid_statuses = ["active", "revoked"]
@@ -40,14 +40,14 @@ class Session(BaseModel):
             raise ValueError(f"Status must be one of {valid_statuses}, got: {value}")
         return value
 
-    @validator("device_info")
+    @field_validator("device_info")
     def validate_device_info(cls, value):
         """Ensure device_info is a valid string if provided."""
         if value is not None and (not isinstance(value, str) or not value.strip()):
             raise ValueError("Device info must be a non-empty string if provided")
         return value
 
-    @validator("expires_at", pre=True)
+    @field_validator("expires_at", mode="before")
     def ensure_datetime_with_timezone(cls, value):
         """Ensure expires_at has timezone information."""
         if isinstance(value, str):
@@ -62,7 +62,7 @@ class Session(BaseModel):
             raise ValueError("Expires_at must include timezone information")
         return value
 
-    @validator("expires_at")
+    @field_validator("expires_at")
     def ensure_future_expiration(cls, value):
         """Ensure expires_at is in the future relative to created_at."""
         now = datetime.now(timezone.utc)

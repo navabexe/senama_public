@@ -2,7 +2,7 @@
 from datetime import datetime, timezone
 from typing import Optional
 
-from pydantic import BaseModel, Field, validator
+from pydantic import BaseModel, Field,  field_validator
 
 
 class Order(BaseModel):
@@ -23,14 +23,14 @@ class Order(BaseModel):
     updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc),
                                  description="Last update time (UTC)")
 
-    @validator("id", "user_id", "vendor_id", "product_id", pre=True)
+    @field_validator("id", "user_id", "vendor_id", "product_id", mode="before")
     def validate_id_format(cls, value):
         """Validate that ID fields are valid strings."""
         if value is not None and (not isinstance(value, str) or not value.strip()):
             raise ValueError(f"ID must be a non-empty string, got: {value}")
         return value
 
-    @validator("status")
+    @field_validator("status")
     def validate_status(cls, value):
         """Ensure status is valid."""
         valid_statuses = ["pending", "accepted", "delivered", "cancelled"]
@@ -38,7 +38,7 @@ class Order(BaseModel):
             raise ValueError(f"Status must be one of {valid_statuses}, got: {value}")
         return value
 
-    @validator("payment_status")
+    @field_validator("payment_status")
     def validate_payment_status(cls, value):
         """Ensure payment_status is valid."""
         valid_payment_statuses = ["unpaid", "paid", "failed"]
@@ -46,14 +46,14 @@ class Order(BaseModel):
             raise ValueError(f"Payment status must be one of {valid_payment_statuses}, got: {value}")
         return value
 
-    @validator("shipping_address", "notes", "payment_method")
+    @field_validator("shipping_address", "notes", "payment_method")
     def validate_optional_strings(cls, value):
         """Ensure optional string fields are valid if provided."""
         if value is not None and (not isinstance(value, str) or not value.strip()):
             raise ValueError("Field must be a non-empty string if provided")
         return value
 
-    @validator("tracking_info")
+    @field_validator("tracking_info")
     def validate_tracking_info(cls, value):
         """Ensure tracking_info is a dictionary if provided."""
         if value is not None and not isinstance(value, dict):

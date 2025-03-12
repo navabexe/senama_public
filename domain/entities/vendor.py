@@ -2,7 +2,7 @@
 from datetime import datetime, timezone
 from typing import Optional, List
 
-from pydantic import BaseModel, Field, validator
+from pydantic import BaseModel, Field,  field_validator
 
 
 class Vendor(BaseModel):
@@ -19,7 +19,7 @@ class Vendor(BaseModel):
     updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc),
                                  description="Last update time (UTC)")
 
-    @validator("id", "category_ids", pre=True)
+    @field_validator("id", "category_ids", mode="before")
     def validate_id_format(cls, value):
         if value is None:
             return value
@@ -31,38 +31,38 @@ class Vendor(BaseModel):
             raise ValueError(f"ID must be a non-empty string, got: {value}")
         return value
 
-    @validator("phone")
+    @field_validator("phone")
     def validate_phone(cls, value):
         if not value or not isinstance(value, str):
             raise ValueError("Phone must be a non-empty string")
         return value.strip()
 
-    @validator("business_name")
+    @field_validator("business_name")
     def validate_business_name(cls, value):
         if not value or not isinstance(value, str):
             raise ValueError("Business name must be a non-empty string")
         return value.strip()
 
-    @validator("description")
+    @field_validator("description")
     def validate_description(cls, value):
         if value is not None and (not isinstance(value, str) or not value.strip()):
             raise ValueError("Description must be a non-empty string if provided")
         return value
 
-    @validator("roles")
+    @field_validator("roles")
     def validate_roles(cls, value):
         if not value or not isinstance(value, list) or not all(isinstance(r, str) and r.strip() for r in value):
             raise ValueError("Roles must be a non-empty list of strings")
         return value
 
-    @validator("status")
+    @field_validator("status")
     def validate_status(cls, value):
         valid_statuses = ["active", "inactive"]
         if value not in valid_statuses:
             raise ValueError(f"Status must be one of {valid_statuses}, got: {value}")
         return value
 
-    @validator("avatar_urls")
+    @field_validator("avatar_urls")
     def validate_avatar_urls(cls, value):
         if value is not None:
             if not isinstance(value, list) or not all(isinstance(url, str) and url.strip() for url in value):

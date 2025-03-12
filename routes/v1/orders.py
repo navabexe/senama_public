@@ -7,7 +7,8 @@ from core.auth.auth import get_current_user, get_token
 from core.errors import UnauthorizedError, ValidationError, NotFoundError
 from domain.schemas.order import OrderCreate, OrderUpdate, OrderResponse
 from infrastructure.database.client import get_db
-from services.orders import create_order, get_order, get_orders_by_user, get_orders_by_vendor, update_order, delete_order
+from services.orders import create_order, get_order, get_orders_by_user, get_orders_by_vendor, update_order, \
+    delete_order
 import logging
 
 router = APIRouter()
